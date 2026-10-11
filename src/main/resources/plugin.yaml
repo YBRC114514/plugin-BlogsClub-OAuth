@@ -1,0 +1,21 @@
+apiVersion: plugin.halo.run/v1alpha1
+kind: Plugin
+metadata:
+  name: plugin-blogsclub
+  annotations:
+    store.halo.run/app-id: app-blogsclub
+spec:
+  enabled: true
+  requires: ">=2.20.8"
+  author:
+    name: 拥抱日出
+    website: https://blog.byside.top
+  logo: logo.png
+  homepage: https://blog.byside.top
+  repo: https://www.blogsclub.org/platform.html
+  issues: https://www.blogsclub.org/platform.html
+  displayName: "BlogsClub 账号验证"
+  description: "让 Halo 支持使用 BlogsClub 开放平台账号进行 OAuth 登录、自动注册与账号绑定"
+  license:
+    - name: "GPL-3.0"
+      url: "https://www.gnu.org/licenses/gpl-3.0.html"

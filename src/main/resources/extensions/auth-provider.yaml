@@ -1,0 +1,21 @@
+apiVersion: auth.halo.run/v1alpha1
+kind: AuthProvider
+metadata:
+  name: blogsclub
+  labels:
+    auth.halo.run/auth-binding: "true"
+spec:
+  displayName: BlogsClub
+  description: 使用 BlogsClub（博客俱乐部）账号登录 Halo，支持自动注册与账号绑定。
+  logo: /plugins/plugin-blogsclub/assets/static/blogsclub.png
+  website: https://www.blogsclub.org
+  helpPage: https://www.blogsclub.org/platform.html
+  authenticationUrl: /oauth2/authorization/blogsclub
+  bindingUrl: /oauth2/authorization/blogsclub
+  unbindUrl: /apis/uc.api.auth.halo.run/v1alpha1/user-connections/blogsclub/disconnect
+  authType: oauth2
+  settingRef:
+    name: blogsclub-oauth2-setting
+    group: blogsclubOauth
+  configMapRef:
+    name: oauth2-blogsclub-config

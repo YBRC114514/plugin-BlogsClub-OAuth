@@ -1,0 +1,19 @@
+apiVersion: v1alpha1
+kind: Setting
+metadata:
+  name: blogsclub-oauth2-setting
+spec:
+  forms:
+    - group: blogsclubOauth
+      label: "BlogsClub 应用配置"
+      formSchema:
+        - $formkit: text
+          name: clientId
+          label: "AppID（Client ID）"
+          validation: required:trim
+          help: "在 BlogsClub 开放平台创建应用后获得的 AppID。"
+        - $formkit: password
+          name: clientSecret
+          label: "AppKey（Client Secret）"
+          validation: required:trim
+          help: "在 BlogsClub 开放平台创建应用后获得的 AppKey，服务端换取 access_token 时使用。此处以密文显示，不会明文展示。"

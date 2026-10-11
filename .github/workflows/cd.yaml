@@ -1,0 +1,17 @@
+name: CD
+
+on:
+  release:
+    types:
+      - published
+
+jobs:
+  cd:
+    uses: halo-sigs/reusable-workflows/.github/workflows/plugin-cd.yaml@v5
+    permissions:
+      contents: write
+    with:
+      # The first release only uploads assets to the GitHub Release. Once the app is
+      # approved in the Halo app store, set this to false and add the app-id plus a
+      # HALO_PAT secret so later versions sync automatically.
+      skip-appstore-release: true

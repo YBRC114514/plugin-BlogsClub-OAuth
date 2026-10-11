@@ -1,0 +1,19 @@
+apiVersion: oauth.halo.run/v1alpha1
+kind: Oauth2ClientRegistration
+metadata:
+  name: blogsclub
+spec:
+  # BlogsClub expects client credentials in the request body.
+  clientAuthenticationMethod: "client_secret_post"
+  authorizationGrantType: "authorization_code"
+  redirectUri: "{baseUrl}/login/oauth2/code/blogsclub"
+  # BlogsClub expects a comma separated scope string, e.g. "basic,email".
+  scopes:
+    - "basic,email"
+  authorizationUri: "https://www.blogsclub.org/Oauth/Login"
+  tokenUri: "https://www.blogsclub.org/Oauth/getOauthData?action=token"
+  userInfoUri: "https://www.blogsclub.org/Oauth/getOauthData?action=userinfo"
+  userInfoAuthenticationMethod: "header"
+  # BlogsClub uniquely identifies a blogger by the numeric openid.
+  userNameAttributeName: "openid"
+  clientName: "BlogsClub"
