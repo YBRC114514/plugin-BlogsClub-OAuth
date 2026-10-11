@@ -1,0 +1,18 @@
+# Normalize line endings so the CI/CD runners (Linux) and Windows produce
+# identical files, and keep shell scripts executable.
+* text=auto
+
+*.java text
+*.yaml text
+*.yml text
+*.md text
+*.gradle text
+*.properties text
+*.txt text
+
+*.bat text eol=crlf
+*.sh text eol=lf
+gradlew text eol=lf
+
+*.jar binary
+*.png binary
