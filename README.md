@@ -122,6 +122,22 @@ blogsclub:
 
 出于安全考虑，`host` 仅接受纯主机名 / IP（不含协议、端口、路径）。
 
+## 更新日志
+
+### v1.0.1
+
+- **修复全站 404 / 500 错误页面被劫持的问题**
+
+  从 v1.0.0 起，站点上任何访问不到的地址（例如不存在的文章 `/1111`）都会被替换成「BlogsClub 登录失败」页面，站点自身的错误页无法正常显示。原因是插件的登录过滤器误将非登录请求的异常也一并拦截。
+
+  现已将拦截范围收窄至 BlogsClub 自身的登录接口，其余请求交由 Halo 与主题正常处理，404、500 页面恢复原样。
+
+  本次为紧急修复版本，不涉及配置变更，无需重新填写 AppID / AppKey。
+
+### v1.0.0
+
+- 首个正式版本：BlogsClub 账号 OAuth 2.0 登录、首次登录自动注册、邮箱自动填充并完成验证、账号绑定与解绑
+
 ## 安全说明
 
 - 所有对 BlogsClub 的请求经响应式 `WebClient` 发出，连接与响应超时均为 15s，响应体上限 256KB
@@ -133,7 +149,7 @@ blogsclub:
 
 ```bash
 ./gradlew clean build
-# 产物：build/libs/plugin-blogsclub-1.0.0.jar
+# 产物：build/libs/plugin-blogsclub-1.0.1.jar
 ```
 
 运行单元测试：
@@ -149,6 +165,7 @@ src/main/java/run/halo/plugin/blogsclub/
   BlogsClubPlugin.java                        插件主类
   BlogsClubAuthenticationWebFilter.java       OAuth2 回调过滤器（含出站 WebClient 配置）
   BlogsClubRedirectWebFilter.java             授权跳转过滤器（透传 popup display 参数）
+  BlogsClubRequests.java                       BlogsClub 接口路径判定（防止过滤器劫持全站错误页）
   BlogsClubOAuth2UserService.java             userinfo 适配器（解包 data / 映射 openid）
   BlogsClubClientRegistrationRepository.java  客户端注册仓库（读取 AppID / AppKey）
   BlogsClubUserPreCreatingHandler.java        建号前写入 BlogsClub 邮箱 / 昵称 / 头像
