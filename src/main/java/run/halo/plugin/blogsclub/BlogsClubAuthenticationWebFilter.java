@@ -121,9 +121,23 @@ public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityW
         this.profileHandler = profileHandler;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>This filter is registered as a global {@link AuthenticationSecurityWebFilter}, so it sees
+     * every single request of the site. The error handling below must therefore be restricted to
+     * the BlogsClub callback: swallowing errors unconditionally replaced Halo's own 404 page (and
+     * any other error page) with the "BlogsClub 登录失败" page for the whole blog.</p>
+     */
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
-        return delegate.filter(exchange, chain)
+        var result = delegate.filter(exchange, chain);
+        if (!BlogsClubRequests.isCallback(exchange)) {
+            // Not ours: let the error travel up untouched so Halo / the theme renders its own
+            // 404 or 500 page.
+            return result;
+        }
+        return result
             .onErrorResume(BlogsClubConfigException.class, e -> notice(exchange,
                 "尚未完成 BlogsClub 配置", NOTICE))
             .onErrorResume(e -> {
