@@ -3,6 +3,9 @@
 build/
 !gradle/wrapper/gradle-wrapper.jar
 
+# Build artifacts are produced by the CD workflow on Release; keep them out of history
+release/
+
 # Local debugging workspace: contains a 100+ MB Halo jar and runtime data
 workplace/
 
