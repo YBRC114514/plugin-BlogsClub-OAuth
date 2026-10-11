@@ -11,6 +11,9 @@ jobs:
     permissions:
       contents: write
     with:
+      # Backend-only plugin: no `console`/`ui` directory, so skip the Node toolchain.
+      skip-node-setup: true
+      java-version: "21"
       # The first release only uploads assets to the GitHub Release. Once the app is
       # approved in the Halo app store, set this to false and add the app-id plus a
       # HALO_PAT secret so later versions sync automatically.

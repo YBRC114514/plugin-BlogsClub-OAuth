@@ -11,3 +11,9 @@ on:
 jobs:
   ci:
     uses: halo-sigs/reusable-workflows/.github/workflows/plugin-ci.yaml@v5
+    with:
+      # This plugin is backend-only: there is no `console`/`ui` directory and no
+      # pnpm manifest, so the Node/pnpm toolchain must not be set up. Without this
+      # the workflow fails while preparing a Node environment it never uses.
+      skip-node-setup: true
+      java-version: "21"
