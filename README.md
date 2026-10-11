@@ -1,8 +1,6 @@
 # BlogsClub 账号验证
 
-[![Halo](https://img.shields.io/badge/Halo-2.20.8%2B-blue)](https://www.halo.run)
 [![License](https://img.shields.io/badge/license-GPL--3.0-green)](LICENSE)
-[![Halo 应用市场](https://img.shields.io/badge/Halo--App%20Store-待上架-orange)](https://www.halo.run/store)
 
 让 Halo 站点支持使用 **BlogsClub（博客俱乐部）** 开放平台账号登录与绑定。
 
@@ -166,7 +164,6 @@ src/main/resources/extensions/
 
 ## 致谢
 
-- [Halo](https://www.halo.run) —— 站点与插件运行平台
 - [BlogsClub 开放平台](https://www.blogsclub.org/platform.html) —— 提供 OAuth 2.0 接口
 
 ## 许可证
