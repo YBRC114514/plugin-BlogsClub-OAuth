@@ -22,6 +22,9 @@ Thumbs.db
 *.tmp
 *.bak
 
+# Local README preview (generated, not part of the project)
+README.preview.html
+
 # Local Halo runtime data at repo root only.
 # Must be anchored with a leading slash: a bare "halo/" would also match the
 # source package directory src/main/java/run/halo/ and drop every Java file.

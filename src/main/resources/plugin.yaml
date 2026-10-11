@@ -12,8 +12,8 @@ spec:
     website: https://blog.byside.top
   logo: logo.png
   homepage: https://blog.byside.top
-  repo: https://www.blogsclub.org/platform.html
-  issues: https://www.blogsclub.org/platform.html
+  repo: https://github.com/YOUR_USERNAME/plugin-BlogsClub-OAuth
+  issues: https://github.com/YOUR_USERNAME/plugin-BlogsClub-OAuth/issues
   displayName: "BlogsClub 账号验证"
   description: "让 Halo 支持使用 BlogsClub 开放平台账号进行 OAuth 登录、自动注册与账号绑定"
   license:

@@ -175,4 +175,4 @@ src/main/resources/extensions/
 
 ## 反馈
 
-问题反馈与功能建议请提交到 [GitHub Issues](https://github.com/YOUR_USERNAME/plugin-blogsclub/issues)。
+问题反馈与功能建议请提交到 [GitHub Issues](https://github.com/YOUR_USERNAME/plugin-BlogsClub-OAuth/issues)。
