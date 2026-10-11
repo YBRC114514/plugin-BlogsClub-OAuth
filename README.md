@@ -2,10 +2,21 @@
 
 [![Halo](https://img.shields.io/badge/Halo-2.20.8%2B-blue)](https://www.halo.run)
 [![License](https://img.shields.io/badge/license-GPL--3.0-green)](LICENSE)
+[![Halo 应用市场](https://img.shields.io/badge/Halo--App%20Store-待上架-orange)](https://www.halo.run/store)
 
 让 Halo 站点支持使用 **BlogsClub（博客俱乐部）** 开放平台账号登录与绑定。
 
 ![logo](src/main/resources/logo.png)
+
+## 截图
+
+**登录页新增 BlogsClub 入口**
+
+![登录页](screenshots/login-page.png)
+
+**个人中心可绑定 / 解绑 BlogsClub 账号**
+
+![身份认证](screenshots/identity-binding.png)
 
 ## 功能
 
@@ -153,6 +164,15 @@ src/main/resources/extensions/
   setting.yaml                                AppID / AppKey 配置表单
 ```
 
+## 致谢
+
+- [Halo](https://www.halo.run) —— 站点与插件运行平台
+- [BlogsClub 开放平台](https://www.blogsclub.org/platform.html) —— 提供 OAuth 2.0 接口
+
 ## 许可证
 
 [GPL-3.0](LICENSE)
+
+## 反馈
+
+问题反馈与功能建议请提交到 [GitHub Issues](https://github.com/YOUR_USERNAME/plugin-blogsclub/issues)。
