@@ -1,4 +1,4 @@
-package run.halo.plugin.blogsclub;
+package io.github.ybrc114514.blogsclub;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;

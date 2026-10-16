@@ -1,4 +1,4 @@
-package run.halo.plugin.blogsclub;
+package io.github.ybrc114514.blogsclub;
 
 import jakarta.validation.Valid;
 import lombok.Data;

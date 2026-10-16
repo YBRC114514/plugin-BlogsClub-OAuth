@@ -1,10 +1,8 @@
-package run.halo.plugin.blogsclub;
+package io.github.ybrc114514.blogsclub;
 
 import java.time.Duration;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.stereotype.Component;
@@ -14,15 +12,23 @@ import run.halo.app.core.extension.User;
 import run.halo.app.core.user.service.UserPreCreatingHandler;
 
 /**
- * Fills a freshly created Halo account with the profile BlogsClub returned, so a blogger signing in
- * for the first time never has to type or verify an e-mail address.
+ * Writes the BlogsClub profile onto a Halo account that is about to be created, so a blogger
+ * signing in for the first time does not have to type or verify an e-mail address.
  *
- * <p>Halo provisions the account inside its own OAuth2 filter chain and only afterwards invokes the
- * {@link UserPreCreatingHandler} extension point. That hook receives the {@link User} but not the
- * OAuth2 principal, and the username Halo generates is random ({@code user-ylitqejf}), so the
- * principal cannot be looked up by name. The attributes are therefore parked by the authentication
- * filter and claimed here by matching whatever the new account already carries: the display name,
- * the avatar, or — most reliably — the fact that it is the only unclaimed profile.</p>
+ * <p><b>How the profile is bound to the account.</b> Halo provisions the account inside its own
+ * OAuth2 filter chain and only afterwards invokes {@link UserPreCreatingHandler}. That hook receives
+ * the {@link User} but neither the OAuth2 principal nor the WebSession, and the generated username
+ * is random ({@code user-ylitqejf}), so nothing on the incoming {@code User} identifies which
+ * BlogsClub identity is being registered. Guessing — by matching the display name, the e-mail, or
+ * "the only profile still waiting" — risks writing one blogger's e-mail onto another blogger's
+ * account whenever two registrations overlap.</p>
+ *
+ * <p>Instead, {@link #remember} parks the profile under the verified BlogsClub identity (its
+ * {@code openid}) <em>together with</em> the id of the session that authenticated it, and
+ * {@link #preCreating} hands the profile back only when the session creating the account is the very
+ * same one that authenticated. A profile can therefore never leak across users or sessions, and when
+ * the association cannot be proven the account is simply created without backfill rather than with
+ * somebody else's data.</p>
  *
  * <p>Entries are removed as soon as they are claimed and expire on their own, so the map stays
  * small. Only blank fields are filled; anything already set is left untouched.</p>
@@ -31,7 +37,6 @@ import run.halo.app.core.user.service.UserPreCreatingHandler;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class BlogsClubUserPreCreatingHandler implements UserPreCreatingHandler {
 
     /** Upper bound on parked profiles; protects against unbounded growth under abuse. */
@@ -40,25 +45,37 @@ public class BlogsClubUserPreCreatingHandler implements UserPreCreatingHandler {
     /** A parked profile older than this can no longer belong to the account being created. */
     private static final Duration MAX_AGE = Duration.ofMinutes(10);
 
-    private final Map<String, ParkedProfile> pendingProfiles = new ConcurrentHashMap<>();
-
-    private record ParkedProfile(Map<String, Object> attributes, long parkedAt) {
+    /**
+     * Verified profile, keyed by the BlogsClub {@code openid} that authenticated it.
+     *
+     * @param attributes BlogsClub userinfo attributes
+     * @param sessionId  id of the web session that completed the OAuth2 exchange
+     * @param parkedAt   creation timestamp in milliseconds
+     */
+    private record ParkedProfile(Map<String, Object> attributes, String sessionId, long parkedAt) {
 
         boolean isExpired() {
             return System.currentTimeMillis() - parkedAt > MAX_AGE.toMillis();
         }
     }
 
+    private final Map<String, ParkedProfile> pendingProfiles = new ConcurrentHashMap<>();
+
     /**
-     * Parks the BlogsClub attributes of an identity that has just authenticated, so the account
-     * Halo is about to create can pick them up.
+     * Parks the BlogsClub attributes of an identity that has just authenticated, so the account Halo
+     * is about to create can pick them up.
+     *
+     * <p>The profile is bound to {@code sessionId}: only an account created by the same session that
+     * authenticated at BlogsClub may claim it.</p>
      *
      * @param registrationId OAuth2 registration id; only BlogsClub is relevant
-     * @param principal     the authenticated BlogsClub principal
+     * @param principal      the authenticated BlogsClub principal
+     * @param sessionId      id of the web session the OAuth2 exchange happened in
      */
-    public void remember(String registrationId, OAuth2User principal) {
+    public void remember(String registrationId, OAuth2User principal, String sessionId) {
         if (!BlogsClubClientRegistrationRepository.REGISTRATION_ID.equals(registrationId)
-            || principal == null) {
+            || principal == null
+            || !StringUtils.hasText(sessionId)) {
             return;
         }
         String openId = principal.getName();
@@ -66,21 +83,21 @@ public class BlogsClubUserPreCreatingHandler implements UserPreCreatingHandler {
             return;
         }
         evictExpired();
-        if (pendingProfiles.size() >= MAX_CACHE_SIZE) {
+        if (!pendingProfiles.containsKey(openId) && pendingProfiles.size() >= MAX_CACHE_SIZE) {
             // Drop the oldest entry so a burst of concurrent logins still gets handled.
             pendingProfiles.entrySet().stream()
                 .min(java.util.Comparator.comparingLong(e -> e.getValue().parkedAt()))
                 .map(Map.Entry::getKey)
                 .ifPresent(pendingProfiles::remove);
         }
-        pendingProfiles.put(openId,
-            new ParkedProfile(Map.copyOf(principal.getAttributes()), System.currentTimeMillis()));
+        pendingProfiles.put(openId, new ParkedProfile(
+            Map.copyOf(principal.getAttributes()), sessionId, System.currentTimeMillis()));
         log.info("[BlogsClub] 已缓存 BlogsClub 资料，等待建号时回填：openid={}", openId);
     }
 
     @Override
     public Mono<Void> preCreating(User user) {
-        Map<String, Object> attributes = claim(user);
+        Map<String, Object> attributes = claim();
         if (attributes == null) {
             return Mono.empty();
         }
@@ -91,47 +108,48 @@ public class BlogsClubUserPreCreatingHandler implements UserPreCreatingHandler {
     }
 
     /**
-     * Finds the parked profile that belongs to the account currently being created. Halo names the
-     * account randomly, so matching relies on data the account already carries. A single parked
-     * profile is unambiguous and is the common case (one login at a time).
+     * Claims the parked profile that provably belongs to the session creating the account.
+     *
+     * <p>This is the only place a profile may be handed out. It demands an unambiguous association
+     * with the current session: when zero or several profiles are waiting for it, the account is
+     * created without backfill rather than with data that belongs to somebody else.</p>
+     *
+     * @return the BlogsClub attributes when they can be attributed to the current session
      */
-    private Map<String, Object> claim(User user) {
+    private Map<String, Object> claim() {
         evictExpired();
         if (pendingProfiles.isEmpty()) {
             return null;
         }
-        String displayName = user.getSpec().getDisplayName();
-        String email = user.getSpec().getEmail();
-        for (Map.Entry<String, ParkedProfile> entry : pendingProfiles.entrySet()) {
-            var attributes = entry.getValue().attributes();
-            if (matches(displayName, attributes.get("blog_name"))
-                || matches(email, attributes.get("email"))
-                || matches(email, attributes.get("openid"))) {
-                pendingProfiles.remove(entry.getKey());
-                log.info("[BlogsClub] 建号时匹配到 BlogsClub 资料：openid={}", entry.getKey());
-                return attributes;
+        String currentSessionId = BlogsClubSessionContext.currentSessionId();
+        if (currentSessionId == null) {
+            // No session to attribute the profile to; never guess.
+            log.info("[BlogsClub] 建号时无法确定当前会话，跳过资料回填");
+            return null;
+        }
+        String matchedKey = null;
+        for (var entry : pendingProfiles.entrySet()) {
+            if (!currentSessionId.equals(entry.getValue().sessionId())) {
+                continue;
             }
+            if (matchedKey != null) {
+                // Ambiguous: two identities raced on one session. Skip rather than mis-attribute.
+                log.warn("[BlogsClub] 建号时同一会话存在多份 BlogsClub 资料，跳过回填以避免错配");
+                return null;
+            }
+            matchedKey = entry.getKey();
         }
-        if (pendingProfiles.size() == 1) {
-            var only = pendingProfiles.entrySet().iterator().next();
-            pendingProfiles.remove(only.getKey());
-            log.info("[BlogsClub] 建号时按唯一待处理资料回填：openid={}", only.getKey());
-            return only.getValue().attributes();
+        if (matchedKey == null) {
+            log.info("[BlogsClub] 建号时未找到与当前会话关联的 BlogsClub 资料，跳过回填");
+            return null;
         }
-        return null;
-    }
-
-    private static boolean matches(String actual, Object candidate) {
-        return StringUtils.hasText(actual) && candidate != null
-            && actual.equalsIgnoreCase(String.valueOf(candidate));
+        var claimed = pendingProfiles.remove(matchedKey);
+        log.info("[BlogsClub] 建号时已按会话关联到 BlogsClub 资料：openid={}", matchedKey);
+        return claimed.attributes();
     }
 
     private void evictExpired() {
-        List<String> expired = pendingProfiles.entrySet().stream()
-            .filter(e -> e.getValue().isExpired())
-            .map(Map.Entry::getKey)
-            .toList();
-        expired.forEach(pendingProfiles::remove);
+        pendingProfiles.entrySet().removeIf(entry -> entry.getValue().isExpired());
     }
 
     /**

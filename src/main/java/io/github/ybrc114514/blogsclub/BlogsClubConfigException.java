@@ -1,4 +1,4 @@
-package run.halo.plugin.blogsclub;
+package io.github.ybrc114514.blogsclub;
 
 /**
  * Thrown when the BlogsClub AppID / AppKey have not been filled in yet.

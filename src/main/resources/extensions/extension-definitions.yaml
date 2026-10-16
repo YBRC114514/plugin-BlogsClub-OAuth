@@ -5,7 +5,7 @@ metadata:
   labels:
     auth.halo.run/extension-point-name: "authentication-security-webfilter"
 spec:
-  className: run.halo.plugin.blogsclub.BlogsClubAuthenticationWebFilter
+  className: io.github.ybrc114514.blogsclub.BlogsClubAuthenticationWebFilter
   extensionPointName: authentication-security-webfilter
   displayName: "BlogsClubAuthenticationWebFilter"
   description: "Authenticates a user via the BlogsClub OAuth 2.0 authorization code flow."
@@ -17,7 +17,7 @@ metadata:
   labels:
     auth.halo.run/extension-point-name: "http-basic-security-webfilter"
 spec:
-  className: run.halo.plugin.blogsclub.BlogsClubRedirectWebFilter
+  className: io.github.ybrc114514.blogsclub.BlogsClubRedirectWebFilter
   extensionPointName: http-basic-security-webfilter
   displayName: "BlogsClubRedirectWebFilter"
   description: "Redirects to the BlogsClub authorization endpoint for the OAuth 2.0 flow."

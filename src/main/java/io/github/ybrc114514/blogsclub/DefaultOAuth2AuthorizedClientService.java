@@ -1,4 +1,4 @@
-package run.halo.plugin.blogsclub;
+package io.github.ybrc114514.blogsclub;
 
 import java.util.Collections;
 import java.util.Objects;
@@ -37,7 +37,7 @@ public class DefaultOAuth2AuthorizedClientService implements ReactiveOAuth2Autho
         // Resolve the client by its deterministic name instead of a predicate-based list query:
         // ReactiveExtensionClient treats a predicate as an index query and throws when the queried
         // field is not indexed, which surfaced as an opaque HTTP 500.
-        return (Mono<T>) client.fetch(AuthorizedClient.class,
+        return (Mono<T>) client.fetch(BlogsClubAuthorizedClient.class,
                 authorizedClientName(clientRegistrationId, principalName))
             .flatMap(authorizedClient -> this.clientRegistrationRepository
                 .findByRegistrationId(clientRegistrationId)
@@ -57,11 +57,11 @@ public class DefaultOAuth2AuthorizedClientService implements ReactiveOAuth2Autho
             principal = haloOAuthToken.getOriginal();
         }
         String registrationId = authorizedClient.getClientRegistration().getRegistrationId();
-        return client.fetch(AuthorizedClient.class,
+        return client.fetch(BlogsClubAuthorizedClient.class,
                 authorizedClientName(registrationId, principal.getName())
             )
             .flatMap(record -> {
-                AuthorizedClient newRecord = toAuthorizedClient(authorizedClient);
+                BlogsClubAuthorizedClient newRecord = toAuthorizedClient(authorizedClient);
                 newRecord.getMetadata().setVersion(record.getMetadata().getVersion());
                 return client.update(newRecord);
             })
@@ -75,7 +75,7 @@ public class DefaultOAuth2AuthorizedClientService implements ReactiveOAuth2Autho
     public Mono<Void> removeAuthorizedClient(String clientRegistrationId, String principalName) {
         Assert.hasText(clientRegistrationId, "clientRegistrationId cannot be empty");
         Assert.hasText(principalName, "principalName cannot be empty");
-        return client.fetch(AuthorizedClient.class, authorizedClientName(clientRegistrationId,
+        return client.fetch(BlogsClubAuthorizedClient.class, authorizedClientName(clientRegistrationId,
                 principalName))
             .flatMap(client::delete)
             .then();
@@ -85,7 +85,7 @@ public class DefaultOAuth2AuthorizedClientService implements ReactiveOAuth2Autho
         return clientRegistrationId + "-" + principalName;
     }
 
-    OAuth2AccessToken toAccessToken(AuthorizedClient authorizedClient) {
+    OAuth2AccessToken toAccessToken(BlogsClubAuthorizedClient authorizedClient) {
         OAuth2AccessToken.TokenType tokenType;
         if (OAuth2AccessToken.TokenType.BEARER.getValue()
             .equalsIgnoreCase(authorizedClient.getSpec().getAccessTokenType())) {
@@ -106,20 +106,20 @@ public class DefaultOAuth2AuthorizedClientService implements ReactiveOAuth2Autho
             scopes);
     }
 
-    OAuth2RefreshToken toRefreshToken(AuthorizedClient authorizedClient) {
+    OAuth2RefreshToken toRefreshToken(BlogsClubAuthorizedClient authorizedClient) {
         return new OAuth2RefreshToken(authorizedClient.getSpec().getRefreshTokenValue(),
             authorizedClient.getSpec().getRefreshTokenIssuedAt());
     }
 
-    AuthorizedClient toAuthorizedClient(OAuth2AuthorizedClient param) {
+    BlogsClubAuthorizedClient toAuthorizedClient(OAuth2AuthorizedClient param) {
         final String registrationId = param.getClientRegistration().getRegistrationId();
-        AuthorizedClient authorizedClient = new AuthorizedClient();
+        BlogsClubAuthorizedClient authorizedClient = new BlogsClubAuthorizedClient();
         authorizedClient.setMetadata(new Metadata());
         authorizedClient.getMetadata()
             .setName(authorizedClientName(registrationId, param.getPrincipalName()));
 
-        authorizedClient.setSpec(new AuthorizedClient.AuthorizedClientSpec());
-        AuthorizedClient.AuthorizedClientSpec spec = authorizedClient.getSpec();
+        authorizedClient.setSpec(new BlogsClubAuthorizedClient.BlogsClubAuthorizedClientSpec());
+        BlogsClubAuthorizedClient.BlogsClubAuthorizedClientSpec spec = authorizedClient.getSpec();
 
         spec.setPrincipalName(param.getPrincipalName());
         spec.setRegistrationId(registrationId);

@@ -1,5 +1,5 @@
-apiVersion: oauth.halo.run/v1alpha1
-kind: Oauth2ClientRegistration
+apiVersion: blogsclub.oauth.ybrc114514.io/v1alpha1
+kind: BlogsClubClientRegistration
 metadata:
   name: blogsclub
 spec:

@@ -19,7 +19,7 @@
 ## 功能
 
 - 登录页新增「使用 BlogsClub 登录」入口，基于 Halo 官方 `AuthProvider` / OAuth2 扩展点实现
-- **首次登录自动建号**： BlogsClub 授权通过后自动创建 Halo 账号，并把 BlogsClub 回调返回的邮箱、昵称、头像一并写入，用户**无需填写或验证邮箱**
+- **首次登录自动建号**： BlogsClub 授权通过后按站点的注册策略创建 Halo 账号；若站点允许注册，插件会把 BlogsClub 回调返回的邮箱、昵称、头像一并写入，其中邮箱因来自**刚刚完成认证**的身份提供方，Halo 视其为已提供，用户无需再做邮箱验证
 - 已绑定用户直接登录；个人中心可随时绑定 / 解绑 BlogsClub 账号
 - AppID / AppKey 未配置时显示中文提示页，而不是抛出空白 500 错误
 - 支持弹窗（popup）模式：`/oauth2/authorization/blogsclub?display=popup`
@@ -54,7 +54,7 @@
 
 ### 手动安装 JAR
 
-1. Halo 后台「插件」→「上传插件」，选择 `plugin-blogsclub-1.0.0.jar`；
+1. Halo 后台「插件」→「上传插件」，选择 `plugin-blogsclub-1.1.0.jar`；
 2. 安装完成后**启用**插件；
 3. 进入「用户」→「认证方式」，找到 **BlogsClub** 并**启用**；
 4. 点击该条目的**「设置」**，填写 **AppID** 与 **AppKey**（见下方）。
@@ -124,6 +124,37 @@ blogsclub:
 
 ## 更新日志
 
+### v1.1.0
+
+面向应用市场审核意见的兼容性修复，共 4 项：
+
+- **使用独立资源类型，不再与官方 OAuth2 认证插件冲突**
+
+  v1.0.x 之前，插件注册了与官方 OAuth2 认证插件**完全相同**的资源类型（`oauth.halo.run/v1alpha1` 的 `AuthorizedClient` 与 `Oauth2ClientRegistration`），并在停用时无条件注销。两个插件共存时，停用其中一个会连带注销另一个仍在使用的资源类型，导致其他 OAuth 登录方式的配置读取与令牌保存失效。
+
+  现已将两者改为插件私有分组 `blogsclub.oauth.ybrc114514.io/v1alpha1`：
+
+  | 用途 | 旧资源类型 | 新资源类型 |
+  |------|-----------|-----------|
+  | 已授权客户端 | `oauth.halo.run/v1alpha1` `AuthorizedClient` | `blogsclub.oauth.ybrc114514.io/v1alpha1` `BlogsClubAuthorizedClient` |
+  | 客户端注册 | `oauth.halo.run/v1alpha1` `Oauth2ClientRegistration` | `blogsclub.oauth.ybrc114514.io/v1alpha1` `BlogsClubClientRegistration` |
+
+  插件启停只注册 / 注销自己的两个私有类型，不可能波及官方插件。**升级后无需任何配置变更**，AppID / AppKey 原样保留。
+
+- **修复首次登录的资料回填失效**
+
+  之前的资料缓存逻辑判断了错误的认证结果类型：Halo 会把 OAuth2 认证结果包装为 `HaloOAuth2AuthenticationToken`，而代码只判断了原始的 `OAuth2AuthenticationToken`，导致「已验证但尚未绑定」的会话进不了缓存，邮箱、昵称、头像的回填分支**从不执行** —— 新账号邮箱为空。现已兼容两种令牌形态。
+
+- **资料回填严格绑定当前会话，不再推测用户身份**
+
+  资料缓存现在同时记录**已验证的 BlogsClub 身份（openid）**与**当前 Web 会话 id**，建号时只允许领取同一会话的资料。已移除「按昵称匹配」和「缓存中仅有一条就认为是你」的推测逻辑 —— 这两种做法在多用户同时登录、或同一用户开多个标签页时会写入错误用户的资料。若会话无法唯一匹配，插件宁可跳过回填，也不会写错人。
+
+- **修正插件命名空间与应用 ID 声明**
+
+  业务类的 Java 包名由 `run.halo.plugin.blogsclub` 迁移为 `io.github.ybrc114514.blogsclub`（避免与 Halo 官方代码归属混淆），扩展点注册中的类名引用已同步更新；`plugin.yaml` 中的 `store.halo.run/app-id` 由错误的 `app-blogsclub` 修正为实际应用 ID `app-yjha8jz5`。
+
+本次为纯兼容性修复，不涉及配置项变更与数据库迁移。
+
 ### v1.0.1
 
 - **修复全站 404 / 500 错误页面被劫持的问题**
@@ -149,7 +180,7 @@ blogsclub:
 
 ```bash
 ./gradlew clean build
-# 产物：build/libs/plugin-blogsclub-1.0.1.jar
+# 产物：build/libs/plugin-blogsclub-1.1.0.jar
 ```
 
 运行单元测试：
@@ -161,15 +192,17 @@ blogsclub:
 ## 目录结构
 
 ```
-src/main/java/run/halo/plugin/blogsclub/
-  BlogsClubPlugin.java                        插件主类
+src/main/java/io/github/ybrc114514/blogsclub/
+  BlogsClubPlugin.java                        插件主类（注册 / 注销插件私有资源类型）
   BlogsClubAuthenticationWebFilter.java       OAuth2 回调过滤器（含出站 WebClient 配置）
   BlogsClubRedirectWebFilter.java             授权跳转过滤器（透传 popup display 参数）
-  BlogsClubRequests.java                       BlogsClub 接口路径判定（防止过滤器劫持全站错误页）
+  BlogsClubRequests.java                      BlogsClub 接口路径判定（防止过滤器劫持全站错误页）
+  BlogsClubSessionContext.java                当前 Web 会话上下文（把资料绑定到已验证的会话）
   BlogsClubOAuth2UserService.java             userinfo 适配器（解包 data / 映射 openid）
   BlogsClubClientRegistrationRepository.java  客户端注册仓库（读取 AppID / AppKey）
   BlogsClubUserPreCreatingHandler.java        建号前写入 BlogsClub 邮箱 / 昵称 / 头像
-  BlogsClubOAuth2ClientRegistration.java      Scheme 定义
+  BlogsClubClientRegistration.java            Scheme 定义（私有分组）
+  BlogsClubAuthorizedClient.java              授权客户端 Scheme 定义（私有分组）
   DefaultOAuth2AuthorizedClientService.java   授权客户端持久化
   UserConnectionDisconnectedListener.java     解绑时清理授权客户端
 src/main/resources/extensions/

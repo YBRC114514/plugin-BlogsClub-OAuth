@@ -1,4 +1,4 @@
-package run.halo.plugin.blogsclub;
+package io.github.ybrc114514.blogsclub;
 
 import io.netty.channel.ChannelOption;
 import java.time.Duration;
@@ -9,6 +9,8 @@ import org.springframework.security.oauth2.client.endpoint.WebClientReactiveAuth
 import org.springframework.security.oauth2.client.web.server.authentication.OAuth2LoginAuthenticationWebFilter;
 import org.springframework.security.web.server.context.ServerSecurityContextRepository;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
@@ -20,6 +22,7 @@ import reactor.core.publisher.Mono;
 import reactor.netty.http.client.HttpClient;
 import reactor.netty.transport.ProxyProvider;
 import run.halo.app.security.AuthenticationSecurityWebFilter;
+import run.halo.app.security.authentication.oauth2.HaloOAuth2AuthenticationToken;
 
 /**
  * BlogsClub OAuth2 authentication web filter. Handles the callback at
@@ -92,12 +95,20 @@ public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityW
         // Park the profile right after the token/userinfo exchange. This is the last point before
         // Halo provisions the account and calls UserPreCreatingHandler, so the BlogsClub e-mail is
         // available in time to be written onto the new account.
+        //
+        // The authentication result type must be unwrapped defensively: depending on where this
+        // manager sits in the chain the result is either a plain OAuth2AuthenticationToken or
+        // Halo's HaloOAuth2AuthenticationToken wrapper (which keeps the original in
+        // getOriginal()). Checking only for the former silently skipped the whole backfill branch
+        // on the versions where Halo wraps it.
         org.springframework.security.authentication.ReactiveAuthenticationManager authManager =
             authentication -> tokenEndpoint.authenticate(authentication)
-                .doOnNext(authentication1 -> {
-                    if (authentication1 instanceof OAuth2AuthenticationToken token) {
+                .doOnNext(authenticated -> {
+                    var token = unwrapOAuth2Token(authenticated);
+                    if (token != null) {
                         profileHandler.remember(
-                            token.getAuthorizedClientRegistrationId(), token.getPrincipal());
+                            token.getAuthorizedClientRegistrationId(), token.getPrincipal(),
+                            BlogsClubSessionContext.currentSessionId());
                     }
                 });
 
@@ -122,6 +133,23 @@ public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityW
     }
 
     /**
+     * Extracts the OAuth2 authentication result from whatever wrapper the chain produced.
+     *
+     * <p>Returns {@code null} for a non-OAuth2 authentication so a caller never writes BlogsClub
+     * attributes onto an identity that did not come from BlogsClub.</p>
+     */
+    @Nullable
+    private static OAuth2AuthenticationToken unwrapOAuth2Token(Authentication authenticated) {
+        if (authenticated instanceof HaloOAuth2AuthenticationToken haloToken) {
+            return haloToken.getOriginal();
+        }
+        if (authenticated instanceof OAuth2AuthenticationToken token) {
+            return token;
+        }
+        return null;
+    }
+
+    /**
      * {@inheritDoc}
      *
      * <p>This filter is registered as a global {@link AuthenticationSecurityWebFilter}, so it sees
@@ -137,7 +165,12 @@ public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityW
             // 404 or 500 page.
             return result;
         }
-        return result
+        // Bind this session to the request thread so the profile parked by the authentication
+        // manager can only ever be claimed by an account created in this very session.
+        return BlogsClubSessionContext.resolveSessionId(exchange)
+            .doOnNext(BlogsClubSessionContext::bind)
+            .then(result)
+            .doFinally(signal -> BlogsClubSessionContext.clear())
             .onErrorResume(BlogsClubConfigException.class, e -> notice(exchange,
                 "尚未完成 BlogsClub 配置", NOTICE))
             .onErrorResume(e -> {

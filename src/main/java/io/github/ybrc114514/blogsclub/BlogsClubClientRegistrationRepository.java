@@ -1,4 +1,4 @@
-package run.halo.plugin.blogsclub;
+package io.github.ybrc114514.blogsclub;
 
 import static org.apache.commons.lang3.ObjectUtils.defaultIfNull;
 
@@ -30,7 +30,7 @@ import run.halo.app.infra.utils.JsonUtils;
 /**
  * A reactive repository for the BlogsClub {@link ClientRegistration} that stores registrations
  * in the {@link ReactiveExtensionClient}. The static BlogsClub endpoints come from the
- * {@link BlogsClubOAuth2ClientRegistration} scheme, while both the {@code clientId} (AppID) and
+ * {@link BlogsClubClientRegistration} scheme, while both the {@code clientId} (AppID) and
  * the {@code clientSecret} (AppKey) are read from the {@link AuthProvider}'s {@code configMapRef},
  * which is populated by the plugin's backend Setting form (AppID / AppKey config panel).
  *
@@ -100,7 +100,7 @@ public class BlogsClubClientRegistrationRepository implements ReactiveClientRegi
                 BlogsClubConfigException.MISSING_CREDENTIALS));
         }
         String registrationId = authProvider.getMetadata().getName();
-        return client.fetch(BlogsClubOAuth2ClientRegistration.class, registrationId)
+        return client.fetch(BlogsClubClientRegistration.class, registrationId)
             .switchIfEmpty(Mono.error(new NotFoundException(
                 "Oauth2 client registration " + registrationId + " not found")))
             .map(registration -> clientRegistrationBuilder(registration)
@@ -139,12 +139,12 @@ public class BlogsClubClientRegistrationRepository implements ReactiveClientRegi
         return new AuthenticationMethod(method.toLowerCase());
     }
 
-    ClientRegistration.Builder clientRegistrationBuilder(BlogsClubOAuth2ClientRegistration registration) {
+    ClientRegistration.Builder clientRegistrationBuilder(BlogsClubClientRegistration registration) {
         if (registration == null) {
             throw new IllegalArgumentException(
                 "The clientRegistration in AuthProvider must not be null");
         }
-        BlogsClubOAuth2ClientRegistration.BlogsClubOAuth2ClientRegistrationSpec spec = registration.getSpec();
+        BlogsClubClientRegistration.BlogsClubClientRegistrationSpec spec = registration.getSpec();
         var redirectUri = defaultIfNull(spec.getRedirectUri(), DEFAULT_REDIRECT_URL);
         var externalUrl = externalUrlSupplier.getRaw();
         if (externalUrl != null) {

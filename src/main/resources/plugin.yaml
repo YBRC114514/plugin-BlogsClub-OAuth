@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   name: plugin-blogsclub
   annotations:
-    store.halo.run/app-id: app-blogsclub
+    store.halo.run/app-id: "app-yjha8jz5"
 spec:
   enabled: true
   requires: ">=2.20.8"

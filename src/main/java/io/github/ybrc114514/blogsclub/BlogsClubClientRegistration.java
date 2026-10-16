@@ -1,4 +1,4 @@
-package run.halo.plugin.blogsclub;
+package io.github.ybrc114514.blogsclub;
 
 import static io.swagger.v3.oas.annotations.media.Schema.RequiredMode.REQUIRED;
 
@@ -17,21 +17,28 @@ import run.halo.app.extension.GVK;
  * {@code clientSecret} (AppKey) are provided through the {@link AuthProvider}'s
  * {@code configMapRef}, which is populated by the plugin's backend Setting form.
  *
+ * <p>Like {@link BlogsClubAuthorizedClient}, this extension uses its own group instead of the
+ * official OAuth2 plugin's {@code oauth.halo.run} group. Halo's {@code SchemeManager} keys schemes by
+ * GVK, so reusing the official group would let the two plugins clobber each other's registration:
+ * stopping one unregisters a resource type the other still depends on. A private group keeps the
+ * plugins independent no matter which starts or stops first.</p>
+ *
  * @since 1.0.0
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
 @ToString(callSuper = true)
-@GVK(group = "oauth.halo.run", version = "v1alpha1", kind = "Oauth2ClientRegistration",
-    singular = "oauth2clientregistration", plural = "oauth2clientregistrations")
-public class BlogsClubOAuth2ClientRegistration extends AbstractExtension {
+@GVK(group = "blogsclub.oauth.ybrc114514.io", version = "v1alpha1",
+    kind = "BlogsClubClientRegistration",
+    singular = "blogsclubclientregistration", plural = "blogsclubclientregistrations")
+public class BlogsClubClientRegistration extends AbstractExtension {
 
     @Schema(requiredMode = REQUIRED)
-    private BlogsClubOAuth2ClientRegistrationSpec spec;
+    private BlogsClubClientRegistrationSpec spec;
 
     @Data
     @ToString
-    public static class BlogsClubOAuth2ClientRegistrationSpec {
+    public static class BlogsClubClientRegistrationSpec {
 
         private String clientAuthenticationMethod;
 
