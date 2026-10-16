@@ -4,6 +4,7 @@ import java.util.Collections;
 import java.util.Objects;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
+import org.springframework.lang.Nullable;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
 import org.springframework.security.oauth2.client.ReactiveOAuth2AuthorizedClientService;
@@ -106,9 +107,25 @@ public class DefaultOAuth2AuthorizedClientService implements ReactiveOAuth2Autho
             scopes);
     }
 
+    /**
+     * Rebuilds the persisted refresh token, or {@code null} when there is none.
+     *
+     * <p>BlogsClub does not support the refresh token grant, so the stored value is normally absent.
+     * {@link OAuth2RefreshToken} asserts on a blank token value in its constructor, which would turn
+     * every load into an {@link IllegalArgumentException} — hence the explicit null instead. A record
+     * without a spec is treated the same way: there is nothing to refresh, so nothing is returned.</p>
+     */
+    @Nullable
     OAuth2RefreshToken toRefreshToken(BlogsClubAuthorizedClient authorizedClient) {
-        return new OAuth2RefreshToken(authorizedClient.getSpec().getRefreshTokenValue(),
-            authorizedClient.getSpec().getRefreshTokenIssuedAt());
+        var spec = authorizedClient.getSpec();
+        if (spec == null) {
+            return null;
+        }
+        var refreshTokenValue = spec.getRefreshTokenValue();
+        if (!StringUtils.hasText(refreshTokenValue)) {
+            return null;
+        }
+        return new OAuth2RefreshToken(refreshTokenValue, spec.getRefreshTokenIssuedAt());
     }
 
     BlogsClubAuthorizedClient toAuthorizedClient(OAuth2AuthorizedClient param) {

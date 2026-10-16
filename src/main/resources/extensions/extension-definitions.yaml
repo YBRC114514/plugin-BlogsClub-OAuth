@@ -21,3 +21,15 @@ spec:
   extensionPointName: http-basic-security-webfilter
   displayName: "BlogsClubRedirectWebFilter"
   description: "Redirects to the BlogsClub authorization endpoint for the OAuth 2.0 flow."
+---
+apiVersion: plugin.halo.run/v1alpha1
+kind: ExtensionDefinition
+metadata:
+  name: blogsclub-user-pre-creating-handler
+  labels:
+    auth.halo.run/extension-point-name: "user-pre-creating-handler"
+spec:
+  className: io.github.ybrc114514.blogsclub.BlogsClubUserPreCreatingHandler
+  extensionPointName: user-pre-creating-handler
+  displayName: "BlogsClubUserPreCreatingHandler"
+  description: "Writes the BlogsClub e-mail, display name and avatar onto a new account."

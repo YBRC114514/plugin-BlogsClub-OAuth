@@ -192,9 +192,8 @@ public class BlogsClubAccountProvisioner {
         try {
             var node = OBJECT_MAPPER.readTree(json);
             var allowRegistration = node.path("allowRegistration").asBoolean(false);
-            var mustVerifyEmail = node.path("mustVerifyEmailOnRegistration").asBoolean(false);
             var defaultRole = node.path("defaultRole").asText("");
-            return new SiteUserSetting(allowRegistration, mustVerifyEmail, defaultRole);
+            return new SiteUserSetting(allowRegistration, defaultRole);
         } catch (Exception e) {
             log.warn("[BlogsClub] 解析站点用户设置失败，按不开放注册处理", e);
             return SiteUserSetting.denied();
@@ -204,15 +203,18 @@ public class BlogsClubAccountProvisioner {
     /**
      * The site's user registration policy, as far as BlogsClub provisioning is concerned.
      *
-     * @param allowRegistration   whether the site lets new accounts be created at all
-     * @param mustVerifyEmail     whether the site demands a verified e-mail on registration
-     * @param defaultRole         role granted to new accounts; must be non-blank
+     * <p>Deliberately does <em>not</em> carry {@code mustVerifyEmailOnRegistration}: Halo reads that
+     * flag only in {@code UserServiceImpl#signUp}, i.e. the self-service form. OAuth2 provisioning goes
+     * through {@code createUser}, which validates neither the flag nor the e-mail, so honouring it
+     * here would mean inventing a verification flow Halo does not provide here.</p>
+     *
+     * @param allowRegistration whether the site lets new accounts be created at all
+     * @param defaultRole       role granted to new accounts; must be non-blank
      */
-    public record SiteUserSetting(boolean allowRegistration, boolean mustVerifyEmail,
-                                  String defaultRole) {
+    public record SiteUserSetting(boolean allowRegistration, String defaultRole) {
 
         static SiteUserSetting denied() {
-            return new SiteUserSetting(false, false, "");
+            return new SiteUserSetting(false, "");
         }
     }
 }

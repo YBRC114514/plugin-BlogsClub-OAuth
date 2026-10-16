@@ -57,12 +57,6 @@ public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityW
 
     private final WebFilter delegate;
 
-    private final BlogsClubUserPreCreatingHandler profileHandler;
-
-    private final BlogsClubAccountProvisioningHandler provisioningHandler;
-
-    private final LoginHandlerEnhancer loginHandlerEnhancer;
-
     public BlogsClubAuthenticationWebFilter(BlogsClubLoginConfiguration configuration,
         ServerSecurityContextRepository securityContextRepository,
         OAuth2Properties oAuth2Properties,
@@ -165,9 +159,6 @@ public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityW
         filter.setSecurityContextRepository(securityContextRepository);
 
         this.delegate = filter;
-        this.profileHandler = profileHandler;
-        this.provisioningHandler = provisioningHandler;
-        this.loginHandlerEnhancer = loginHandlerEnhancer;
     }
 
     /**

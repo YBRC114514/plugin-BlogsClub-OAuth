@@ -2,6 +2,7 @@ package io.github.ybrc114514.blogsclub;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.net.URI;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -57,18 +58,20 @@ public class BlogsClubOAuth2UserService implements ReactiveOAuth2UserService<OAu
 
     @Override
     public Mono<OAuth2User> loadUser(OAuth2UserRequest userRequest) throws OAuth2AuthenticationException {
-        String userInfoUri = userRequest.getClientRegistration()
+        // The URI configured on the ClientRegistration is authoritative. BlogsClub answers userinfo
+        // on the same /Oauth/getOauthData endpoint as the token exchange, told apart by the "action"
+        // query parameter that the registration already carries.
+        var userInfoUri = userRequest.getClientRegistration()
             .getProviderDetails()
             .getUserInfoEndpoint()
             .getUri();
-        String accessToken = userRequest.getAccessToken().getTokenValue();
+        var accessToken = userRequest.getAccessToken().getTokenValue();
 
         return webClient.get()
-            .uri(uriBuilder -> uriBuilder
-                .scheme("https").host("www.blogsclub.org").path("/Oauth/getOauthData")
-                .queryParam("action", "userinfo")
-                .queryParam("access_token", accessToken)
-                .build())
+            // No access_token in the query string: URLs end up in reverse-proxy and gateway access
+            // logs, so the credential is carried in the Authorization header only. This matches
+            // userInfoAuthenticationMethod: header in client-registrations.yaml.
+            .uri(URI.create(userInfoUri))
             .headers(headers -> headers.setBearerAuth(accessToken))
             .retrieve()
             .bodyToMono(String.class)

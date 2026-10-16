@@ -92,7 +92,7 @@ public class BlogsClubUserPreCreatingHandler implements UserPreCreatingHandler {
         }
         pendingProfiles.put(openId, new ParkedProfile(
             Map.copyOf(principal.getAttributes()), sessionId, System.currentTimeMillis()));
-        log.info("[BlogsClub] 已缓存 BlogsClub 资料，等待建号时回填：openid={}", openId);
+        log.debug("[BlogsClub] 已缓存 BlogsClub 资料，等待建号时回填：openid={}", openId);
     }
 
     @Override
@@ -144,7 +144,7 @@ public class BlogsClubUserPreCreatingHandler implements UserPreCreatingHandler {
             return null;
         }
         var claimed = pendingProfiles.remove(matchedKey);
-        log.info("[BlogsClub] 建号时已按会话关联到 BlogsClub 资料：openid={}", matchedKey);
+        log.debug("[BlogsClub] 建号时已按会话关联到 BlogsClub 资料：openid={}", matchedKey);
         return claimed.attributes();
     }
 

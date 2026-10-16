@@ -4,7 +4,7 @@ plugins {
     id "run.halo.plugin.devtools" version "0.6.2"
 }
 
-group 'run.halo.plugin.blogsclub'
+group 'io.github.ybrc114514.blogsclub'
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'

@@ -5,6 +5,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.core.user.OAuth2User;
+import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Mono;
 import run.halo.app.core.extension.User;
@@ -42,6 +43,7 @@ import run.halo.app.security.authentication.oauth2.HaloOAuth2AuthenticationToken
  * @since 1.1.0
  */
 @Slf4j
+@Component
 public class BlogsClubAccountProvisioningHandler {
 
     private final ReactiveExtensionClient client;
@@ -110,8 +112,10 @@ public class BlogsClubAccountProvisioningHandler {
      * identity so the list stays tiny, and the indexed query builders ({@code QueryFactory}) are
      * marked for removal in Halo, which would tie the plugin to an API it cannot avoid.</p>
      *
-     * <p>A lookup failure is treated as "not bound" so provisioning can still proceed — the account
-     * name is generated fresh, so a duplicate attempt cannot overwrite anything.</p>
+     * <p>An empty result means "provably unbound" and is the only value that allows provisioning.
+     * A lookup failure completes empty as well, because creating a second account for an identity
+     * that may already be bound would leave duplicate accounts behind — the visitor falling back to
+     * the binding flow is the better outcome.</p>
      */
     private Mono<Boolean> isBound(String openId) {
         return client.listAll(UserConnection.class, ListOptions.builder().build(), Sort.unsorted())
@@ -122,9 +126,9 @@ public class BlogsClubAccountProvisioningHandler {
                     && openId.equals(spec.getProviderUserId());
             })
             .onErrorResume(error -> {
-                log.warn("[BlogsClub] 查询 BlogsClub 绑定关系失败，按未绑定处理：openid={}", openId,
+                log.error("[BlogsClub] 查询 BlogsClub 绑定关系失败，已放弃自动建号以免产生重复账号",
                     error);
-                return Mono.just(false);
+                return Mono.just(true);
             });
     }
 }

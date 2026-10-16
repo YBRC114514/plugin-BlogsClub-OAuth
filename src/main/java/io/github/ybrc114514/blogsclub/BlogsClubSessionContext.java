@@ -1,9 +1,6 @@
 package io.github.ybrc114514.blogsclub;
 
-import java.util.UUID;
-import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Mono;
-import run.halo.app.security.authentication.oauth2.HaloOAuth2AuthenticationToken;
 
 /**
  * Carries the id of the web session that completed a BlogsClub OAuth2 exchange, so the profile can
@@ -12,20 +9,23 @@ import run.halo.app.security.authentication.oauth2.HaloOAuth2AuthenticationToken
  * <p>Profile backfill needs to prove that the account being created belongs to the identity that
  * just authenticated. {@link BlogsClubUserPreCreatingHandler} is invoked from Halo core without the
  * OAuth2 principal, so the association is carried here instead: the OAuth2 callback stamps the
- * current session, and the backfill reads it back from the reactive context of the very same
- * session-bound request.</p>
+ * current session, and the backfill reads it back from the request thread.</p>
+ *
+ * <p><b>No fallback id is ever invented.</b> An earlier version returned an all-zero UUID when the
+ * session id was unavailable, which made every session-less request look like the same session and
+ * would have let one visitor's profile be written onto another's account. An unknown session now
+ * yields {@code null}, and the caller skips the backfill instead.</p>
  *
  * @since 1.0.1
  */
-@Slf4j
 final class BlogsClubSessionContext {
 
     /**
-     * Holder for the current request's session id.
+     * Session id for the current request thread.
      *
-     * <p>A plain (non-subscribed) value holder is not enough: account creation may happen on a
-     * different scheduler thread, so the id is kept in a Reactor context-scoped holder and read back
-     * through {@link #currentSessionId()}.</p>
+     * <p>Account creation happens synchronously inside the OAuth2 callback's reactive chain, which
+     * stays on one thread, so a plain holder is enough. A {@code null} value means "no session was
+     * bound", never "session unknown but assume the same one".</p>
      */
     private static final ThreadLocal<String> CURRENT_SESSION = new ThreadLocal<>();
 
@@ -34,6 +34,10 @@ final class BlogsClubSessionContext {
 
     /** Marks the calling thread as the one authenticated by BlogsClub for {@code sessionId}. */
     static void bind(String sessionId) {
+        if (sessionId == null) {
+            CURRENT_SESSION.remove();
+            return;
+        }
         CURRENT_SESSION.set(sessionId);
     }
 
@@ -50,35 +54,18 @@ final class BlogsClubSessionContext {
      * Derives a stable id for the web session that owns {@code exchange}, creating one lazily when
      * the request has no session yet.
      *
-     * <p>Returning {@code null} (no session available) is a legitimate outcome: the caller then
-     * skips the backfill instead of guessing an owner for the profile.</p>
+     * <p>{@code null} is a legitimate outcome for a session-less or erroring request: the caller then
+     * skips the profile backfill rather than attributing it to an arbitrary session.</p>
      *
      * @param exchange the OAuth2 callback exchange
-     * @return a session id, or {@code null} when none can be established
+     * @return a non-blank session id, or {@code null} when none can be established
      */
     static Mono<String> resolveSessionId(
         org.springframework.web.server.ServerWebExchange exchange) {
         return exchange.getSession()
-            .map(session -> {
-                var id = session.getId();
-                if (id == null) {
-                    return new UUID(0L, 0L).toString();
-                }
-                return id;
-            })
-            .defaultIfEmpty("")
-            .map(id -> id.isBlank() ? new UUID(0L, 0L).toString() : id)
-            .onErrorResume(e -> Mono.just(""))
-            .map(id -> id.isBlank() ? null : id);
-    }
-
-    /**
-     * Reads the BlogsClub profile identity out of an authenticated result.
-     *
-     * @param authenticated the authentication produced by the OAuth2 chain
-     * @return the {@link HaloOAuth2AuthenticationToken} the result was built from, or {@code null}
-     */
-    static HaloOAuth2AuthenticationToken haloTokenOf(Object authenticated) {
-        return authenticated instanceof HaloOAuth2AuthenticationToken haloToken ? haloToken : null;
+            .mapNotNull(session -> session.getId())
+            .filter(id -> !id.isBlank())
+            // No fabricated fallback: an id we cannot read must never collide with another request.
+            .onErrorResume(e -> Mono.empty());
     }
 }

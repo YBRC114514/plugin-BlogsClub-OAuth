@@ -5,12 +5,30 @@ metadata:
   labels:
     halo.run/hidden: "true"
     halo.run/role-template: "true"
-    rbac.authorization.halo.run/aggregate-to-authenticated: "true"
   annotations:
     rbac.authorization.halo.run/module: "Authentication"
     rbac.authorization.halo.run/display-name: "BlogsClub AccessRole"
 rules:
+  # Lets a visitor connect and disconnect their own BlogsClub identity from the user centre.
+  # Deliberately NOT labelled aggregate-to-authenticated: these rules exist so the plugin's own
+  # endpoints can manage the BlogsClub link, and widening them to every authenticated user would
+  # hand unrelated roles access to the plugin surface.
   - apiGroups: [ "api.plugin.halo.run" ]
     resourceNames: [ "plugin-blogsclub" ]
     resources: [ "plugins/connect", "plugins/disconnect" ]
-    verbs: [ "get", "list", "update" ]
+    verbs: [ "get", "update" ]
+
+  # Provisioning a first-time blogger creates a UserConnection so later sign-ins take the
+  # "already bound" path. Scoped to create/get only, and limited to this plugin's own registration
+  # id, so it cannot be used to inspect or tamper with other providers' bindings.
+  - apiGroups: [ "core.halo.run" ]
+    resources: [ "userconnections" ]
+    verbs: [ "create", "get" ]
+
+  # Reading the site's user registration settings ("allowRegistration", "defaultRole") is required
+  # before an account may be created. Only the two well-known ConfigMaps are readable; the plugin
+  # never needs to read arbitrary configuration.
+  - apiGroups: [ "core.halo.run" ]
+    resourceNames: [ "system", "oauth2-blogsclub-config" ]
+    resources: [ "configmaps" ]
+    verbs: [ "get" ]
