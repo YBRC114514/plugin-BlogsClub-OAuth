@@ -54,7 +54,7 @@
 
 ### 手动安装 JAR
 
-1. Halo 后台「插件」→「上传插件」，选择 `plugin-blogsclub-1.1.0.jar`；
+1. Halo 后台「插件」→「上传插件」，选择 `plugin-blogsclub-1.2.0.jar`；
 2. 安装完成后**启用**插件；
 3. 进入「用户」→「认证方式」，找到 **BlogsClub** 并**启用**；
 4. 点击该条目的**「设置」**，填写 **AppID** 与 **AppKey**（见下方）。
@@ -124,6 +124,24 @@ blogsclub:
 
 ## 更新日志
 
+### v1.2.0
+
+补齐「首次登录自动建号」——v1.1.x 只修复了资料回填的类型判断与会话归属，但没有实现建号本身，首次登录的博主仍会被 Halo 送去手动绑定页。
+
+- **首次登录真正自动建号并绑定**
+
+  Halo 的 OAuth2 链路只会写 `UserConnection`。遇到未绑定的身份时，它会把令牌存入会话、登出当前请求，然后跳转 `/login?oauth2_bind` 进入**手动绑定流程**。插件此前完全依赖这条链路，因此从未创建过账号。
+
+  现在由插件在回调成功时接管这一步：身份未绑定 → 读取站点注册设置 → 生成唯一用户名 → 创建账号并授予站点默认角色 → 写入 `UserConnection` 绑定关系 → 再交给 Halo 完成登录增强（记住我、设备管理等）并跳转个人中心。
+
+- **遵循站点的注册与邮箱验证设置**
+
+  建号前会读取站点「用户」设置：`allowRegistration` 为关闭时不建号，访客仍走 Halo 的绑定流程；默认角色取自站点配置而非写死，站点未配置时同样不建号。任一环节出错都不会中断登录，访客照常回到绑定流程。
+
+  你在后台开启的**「注册时必须验证邮箱」不会阻止这里**——该开关只在用户自行提交注册表单（`UserServiceImpl#signUp`）时被读取，OAuth2 建号走的是 `createUser`，Halo 在这条路径上不校验邮箱。因此 BlogsClub 用户无需绑定邮箱即可注册。相应地，这些账号的 `emailVerified` 为 `false`，不影响登录、发文与评论。
+
+- 资料回填仍然严格绑定「已验证的 BlogsClub 身份 + 当前会话」，昵称推测逻辑依旧不存在
+
 ### v1.1.0
 
 面向应用市场审核意见的兼容性修复，共 4 项：
@@ -180,7 +198,7 @@ blogsclub:
 
 ```bash
 ./gradlew clean build
-# 产物：build/libs/plugin-blogsclub-1.1.0.jar
+# 产物：build/libs/plugin-blogsclub-1.2.0.jar
 ```
 
 运行单元测试：
@@ -195,6 +213,8 @@ blogsclub:
 src/main/java/io/github/ybrc114514/blogsclub/
   BlogsClubPlugin.java                        插件主类（注册 / 注销插件私有资源类型）
   BlogsClubAuthenticationWebFilter.java       OAuth2 回调过滤器（含出站 WebClient 配置）
+  BlogsClubAccountProvisioner.java            未绑定身份首次登录时创建账号并绑定
+  BlogsClubAccountProvisioningHandler.java    判定是否需要建号（仅处理 BlogsClub 身份）
   BlogsClubRedirectWebFilter.java             授权跳转过滤器（透传 popup display 参数）
   BlogsClubRequests.java                      BlogsClub 接口路径判定（防止过滤器劫持全站错误页）
   BlogsClubSessionContext.java                当前 Web 会话上下文（把资料绑定到已验证的会话）
