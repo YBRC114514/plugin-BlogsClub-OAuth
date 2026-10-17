@@ -116,7 +116,7 @@ class BlogsClubAccountProvisioningHandlerTest {
         expectCreatedAccountIsHandedBack();
 
         StepVerifier.create(handler.provisionIfUnbound(
-                blogsClubAuth(principal("123", Map.of("blog_name", "某某某的自留地")))))
+                blogsClubAuth(principal("123", Map.of("blog_name", "某某某的自留地"))), null))
             .assertNext(user -> {
                 assertThat(user.getMetadata().getName()).startsWith("user-");
                 assertThat(user.getSpec().getRegisteredAt()).isNotNull();
@@ -140,7 +140,7 @@ class BlogsClubAccountProvisioningHandlerTest {
         when(client.listAll(any(Class.class), any(), any()))
             .thenReturn(Flux.just(connection));
 
-        StepVerifier.create(handler.provisionIfUnbound(blogsClubAuth(principal("123", Map.of()))))
+        StepVerifier.create(handler.provisionIfUnbound(blogsClubAuth(principal("123", Map.of())), null))
             .verifyComplete();
 
         verify(userService, never()).createUser(any(User.class), any());
@@ -152,7 +152,7 @@ class BlogsClubAccountProvisioningHandlerTest {
         when(client.listAll(any(Class.class), any(), any())).thenReturn(Flux.empty());
         siteForbidsRegistration();
 
-        StepVerifier.create(handler.provisionIfUnbound(blogsClubAuth(principal("123", Map.of()))))
+        StepVerifier.create(handler.provisionIfUnbound(blogsClubAuth(principal("123", Map.of())), null))
             .verifyComplete();
 
         verify(userService, never()).createUser(any(User.class), any());
@@ -169,7 +169,7 @@ class BlogsClubAccountProvisioningHandlerTest {
         when(client.fetch(ConfigMap.class, SystemSetting.SYSTEM_CONFIG))
             .thenReturn(Mono.just(configMap));
 
-        StepVerifier.create(handler.provisionIfUnbound(blogsClubAuth(principal("123", Map.of()))))
+        StepVerifier.create(handler.provisionIfUnbound(blogsClubAuth(principal("123", Map.of())), null))
             .verifyComplete();
 
         verify(userService, never()).createUser(any(User.class), any());
@@ -182,7 +182,7 @@ class BlogsClubAccountProvisioningHandlerTest {
         when(client.fetch(ConfigMap.class, SystemSetting.SYSTEM_CONFIG))
             .thenReturn(Mono.error(new IllegalStateException("boom")));
 
-        StepVerifier.create(handler.provisionIfUnbound(blogsClubAuth(principal("123", Map.of()))))
+        StepVerifier.create(handler.provisionIfUnbound(blogsClubAuth(principal("123", Map.of())), null))
             .verifyComplete();
 
         verify(userService, never()).createUser(any(User.class), any());
@@ -202,7 +202,7 @@ class BlogsClubAccountProvisioningHandlerTest {
         var auth = new OAuth2AuthenticationToken(principal("123", Map.of()),
             java.util.Set.of(), "github");
 
-        StepVerifier.create(handler.provisionIfUnbound(auth)).verifyComplete();
+        StepVerifier.create(handler.provisionIfUnbound(auth, null)).verifyComplete();
 
         verify(client, never()).listAll(any(Class.class), any(), any());
         verify(userService, never()).createUser(any(User.class), any());
@@ -214,7 +214,7 @@ class BlogsClubAccountProvisioningHandlerTest {
     void ignoresNonOAuth2Authentication() {
         StepVerifier.create(handler.provisionIfUnbound(
                 new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
-                    "someone", "n/a")))
+                    "someone", "n/a"), null))
             .verifyComplete();
 
         verify(userService, never()).createUser(any(User.class), any());
@@ -232,8 +232,90 @@ class BlogsClubAccountProvisioningHandlerTest {
         siteAllowsRegistration();
         expectCreatedAccountIsHandedBack();
 
-        StepVerifier.create(handler.provisionIfUnbound(blogsClubAuth(principal("123", Map.of()))))
+        StepVerifier.create(handler.provisionIfUnbound(blogsClubAuth(principal("123", Map.of())), null))
             .assertNext(user -> assertThat(user.getMetadata().getName()).startsWith("user-"))
             .verifyComplete();
+    }
+
+    @Test
+    @DisplayName("已登录访客绑定 BlogsClub 时不建新号（交回 Halo 的绑定流程）")
+    void doesNotProvisionForSignedInVisitor() {
+        var signedIn = new org.springframework.security.authentication
+            .UsernamePasswordAuthenticationToken("user-existing", "n/a",
+            java.util.List.of(() -> "ROLE_USER"));
+        when(client.listAll(any(Class.class), any(), any())).thenReturn(Flux.empty());
+        siteAllowsRegistration();
+        expectCreatedAccountIsHandedBack();
+
+        StepVerifier.create(handler.provisionIfUnbound(
+                blogsClubAuth(principal("123", Map.of())), signedIn))
+            .verifyComplete();
+
+        // Nothing may be created — not even a look-ahead account: Halo core binds the
+        // identity to the signed-in account (MapOAuth2AuthenticationFilter's
+        // PRE_AUTHENTICATION branch). Production incident 2026-10-17: every bind attempt
+        // from the user centre produced another user-xxxxxx account instead.
+        verify(userService, never()).createUser(any(User.class), any());
+        verify(client, never()).create(any(UserConnection.class));
+        verify(client, never()).listAll(any(Class.class), any(), any());
+    }
+
+    @Test
+    @DisplayName("已登录但身份已绑定时同样不建号")
+    void doesNotProvisionForSignedInVisitorWithBoundIdentity() {
+        var signedIn = new org.springframework.security.authentication
+            .UsernamePasswordAuthenticationToken("user-existing", "n/a",
+            java.util.List.of(() -> "ROLE_USER"));
+        var connection = new UserConnection();
+        var spec = new UserConnection.UserConnectionSpec();
+        spec.setRegistrationId(REGISTRATION_ID);
+        spec.setProviderUserId("123");
+        spec.setUsername("user-existing");
+        connection.setSpec(spec);
+        when(client.listAll(any(Class.class), any(), any())).thenReturn(Flux.just(connection));
+        siteAllowsRegistration();
+        expectCreatedAccountIsHandedBack();
+
+        StepVerifier.create(handler.provisionIfUnbound(
+                blogsClubAuth(principal("123", Map.of())), signedIn))
+            .verifyComplete();
+
+        verify(userService, never()).createUser(any(User.class), any());
+        verify(client, never()).create(any(UserConnection.class));
+    }
+
+    @Test
+    @DisplayName("匿名令牌不算已登录（信任解析器语义与内核一致），仍会建号")
+    void provisionsForAnonymousPreAuthentication() {
+        var anonymous = new org.springframework.security.authentication
+            .AnonymousAuthenticationToken("key", "anonymousUser",
+            java.util.List.of(() -> "ROLE_ANONYMOUS"));
+        when(client.listAll(any(Class.class), any(), any())).thenReturn(Flux.empty());
+        siteAllowsRegistration();
+        expectCreatedAccountIsHandedBack();
+
+        StepVerifier.create(handler.provisionIfUnbound(
+                blogsClubAuth(principal("123", Map.of())), anonymous))
+            .assertNext(user -> assertThat(user.getMetadata().getName()).startsWith("user-"))
+            .verifyComplete();
+
+        verify(userService).createUser(any(User.class), any());
+    }
+
+    @Test
+    @DisplayName("未认证的预登录认证不算已登录，仍会建号")
+    void provisionsForUnauthenticatedPreAuthentication() {
+        var notSignedIn = new org.springframework.security.authentication
+            .UsernamePasswordAuthenticationToken("user-existing", "n/a");
+        when(client.listAll(any(Class.class), any(), any())).thenReturn(Flux.empty());
+        siteAllowsRegistration();
+        expectCreatedAccountIsHandedBack();
+
+        StepVerifier.create(handler.provisionIfUnbound(
+                blogsClubAuth(principal("123", Map.of())), notSignedIn))
+            .assertNext(user -> assertThat(user.getMetadata().getName()).startsWith("user-"))
+            .verifyComplete();
+
+        verify(userService).createUser(any(User.class), any());
     }
 }

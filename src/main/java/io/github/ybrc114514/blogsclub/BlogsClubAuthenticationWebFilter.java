@@ -8,6 +8,7 @@ import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.security.oauth2.client.authentication.OAuth2LoginReactiveAuthenticationManager;
 import org.springframework.security.oauth2.client.endpoint.WebClientReactiveAuthorizationCodeTokenResponseClient;
 import org.springframework.security.oauth2.client.web.server.authentication.OAuth2LoginAuthenticationWebFilter;
+import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.web.server.context.ServerSecurityContextRepository;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -49,6 +50,14 @@ import run.halo.app.security.authentication.oauth2.HaloOAuth2AuthenticationToken
  * raw OAuth2 token whose name is the opaque openid rather than a Halo username, so Halo would
  * record a login event for an account that does not exist.</p>
  *
+ * <p><b>Signed-in visitors never get a second account.</b> When the blogger already has an
+ * account — the user centre's 绑定 button — the pre-OAuth2 sign-in captured in {@link #filter}
+ * is handed to the provisioning handler, which then steps aside entirely: Halo core's
+ * {@code MapOAuth2AuthenticationFilter} binds an unbound BlogsClub identity to that very account
+ * ({@code createUserConnection} plus session establish), which is the official behaviour.
+ * Provisioning here is reserved for anonymous visitors, the "sign in and an account is created
+ * for you" case this plugin advertises.</p>
+ *
  * <p>The filter is registered as a global {@link AuthenticationSecurityWebFilter} and therefore
  * sees every request of the site, so its error handling is restricted to the BlogsClub callback —
  * otherwise it would replace Halo's own 404 and 500 pages.</p>
@@ -72,10 +81,13 @@ public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityW
 
     private final WebFilter delegate;
 
+    private final ServerSecurityContextRepository securityContextRepository;
+
     public BlogsClubAuthenticationWebFilter(BlogsClubLoginConfiguration configuration,
         ServerSecurityContextRepository securityContextRepository,
         OAuth2Properties oAuth2Properties,
         BlogsClubAccountProvisioningHandler provisioningHandler) {
+        this.securityContextRepository = securityContextRepository;
 
         var proxy = oAuth2Properties.getProxy();
         if (proxy.isEnabled()) {
@@ -147,9 +159,17 @@ public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityW
         // registration), that same core filter logs the visitor out and sends them to
         // /login?oauth2_bind — Halo's native binding flow — which is exactly the documented
         // fallback behaviour.
-        filter.setAuthenticationSuccessHandler((webFilterExchange, authentication) ->
-            provisioningHandler.provisionIfUnbound(authentication)
-                .then(successHandler.onAuthenticationSuccess(webFilterExchange, authentication)));
+        //
+        // The pre-authentication captured in filter() decides between the two branches: a
+        // visitor who already has an account (the user centre's "bind" button) must NOT get a
+        // second one — Halo core binds the identity to the signed-in account instead — while an
+        // anonymous visitor still gets the account this plugin advertises.
+        filter.setAuthenticationSuccessHandler((webFilterExchange, authentication) -> {
+            var preAuthentication = (Authentication) webFilterExchange.getExchange()
+                .getAttributes().get(PRE_AUTHENTICATION_ATTRIBUTE);
+            return provisioningHandler.provisionIfUnbound(authentication, preAuthentication)
+                .then(successHandler.onAuthenticationSuccess(webFilterExchange, authentication));
+        });
         filter.setAuthenticationFailureHandler(
             new org.springframework.security.web.server.authentication
                 .RedirectServerAuthenticationFailureHandler("/login?blogsclub_error"));
@@ -177,22 +197,56 @@ public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityW
     }
 
     /**
+     * Exchange attribute under which the visitor's pre-OAuth2 sign-in is stashed while the
+     * delegate runs. Halo core uses the same idea — its {@code MapOAuth2AuthenticationFilter}
+     * caches the pre-authentication in an exchange attribute before the chain continues and
+     * binds an unbound identity to exactly that account — so this attribute is what makes the
+     * plugin honour the official "bind to my account" behaviour instead of shadowing it.
+     */
+    static final String PRE_AUTHENTICATION_ATTRIBUTE =
+        BlogsClubAuthenticationWebFilter.class.getName() + ".PRE_AUTHENTICATION";
+
+    /**
+     * Same trust resolver core applies to its pre-authentication: anonymous and remember-me
+     * tokens report {@code isAuthenticated() == true} but are not sign-ins.
+     */
+    private static final org.springframework.security.authentication.AuthenticationTrustResolver
+        TRUST_RESOLVER = new org.springframework.security.authentication
+        .AuthenticationTrustResolverImpl();
+
+    /**
      * {@inheritDoc}
      *
      * <p>This filter is registered as a global {@link AuthenticationSecurityWebFilter}, so it sees
      * every single request of the site. The error handling below must therefore be restricted to
      * the BlogsClub callback: swallowing errors unconditionally replaced Halo's own 404 page (and
      * any other error page) with the "BlogsClub 登录失败" page for the whole blog.</p>
+     *
+     * <p>For the callback the visitor's current sign-in is captured <em>before</em> the delegate
+     * runs: a successful OAuth2 login overwrites the security context with the raw OAuth2 token,
+     * and without the capture a signed-in blogger binding BlogsClub would be indistinguishable
+     * from an anonymous one.</p>
      */
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
-        var result = delegate.filter(exchange, chain);
         if (!BlogsClubRequests.isCallback(exchange)) {
             // Not ours: let the error travel up untouched so Halo / the theme renders its own
             // 404 or 500 page.
-            return result;
+            return delegate.filter(exchange, chain);
         }
-        return result
+        // ReactorContextWebFilter has already run (it precedes AUTHENTICATION in the security
+        // chain), so the repository load below returns the session's sign-in for a signed-in
+        // visitor and completes empty for an anonymous one. An OAuth2 token itself is not a
+        // sign-in here — mirroring how core's PRE_AUTHENTICATION excludes it.
+        return securityContextRepository.load(exchange)
+            .mapNotNull(SecurityContext::getAuthentication)
+            .filter(authentication -> TRUST_RESOLVER.isAuthenticated(authentication))
+            .filter(authentication -> !(authentication instanceof OAuth2AuthenticationToken))
+            .flatMap(authentication -> {
+                exchange.getAttributes().put(PRE_AUTHENTICATION_ATTRIBUTE, authentication);
+                return delegate.filter(exchange, chain);
+            })
+            .switchIfEmpty(delegate.filter(exchange, chain))
             .onErrorResume(BlogsClubConfigException.class, e -> notice(exchange,
                 "尚未完成 BlogsClub 配置", NOTICE))
             .onErrorResume(e -> {

@@ -61,7 +61,7 @@ class BlogsClubProvisioningSafetyTest {
         when(client.listAll(eq(UserConnection.class), any(ListOptions.class), any()))
             .thenReturn(reactor.core.publisher.Flux.error(new IllegalStateException("boom")));
 
-        StepVerifier.create(handler().provisionIfUnbound(auth(principal("123"))))
+        StepVerifier.create(handler().provisionIfUnbound(auth(principal("123")), null))
             .verifyComplete();
 
         verify(client, never()).create(any(UserConnection.class));
@@ -80,7 +80,7 @@ class BlogsClubProvisioningSafetyTest {
 
         // The wrapped token must be unwrapped rather than skipped: reaching the lookup at all proves
         // the plugin recognised the BlogsClub registration id inside Halo's wrapper.
-        StepVerifier.create(handler().provisionIfUnbound(wrapped)).verifyComplete();
+        StepVerifier.create(handler().provisionIfUnbound(wrapped, null)).verifyComplete();
 
         verify(client).listAll(eq(UserConnection.class), any(ListOptions.class), any());
     }
@@ -122,7 +122,7 @@ class BlogsClubProvisioningSafetyTest {
 
         // allowRegistration defaults to denied, so nothing is created; the point is that an empty
         // result does not abort the chain before the site settings are consulted.
-        StepVerifier.create(handler().provisionIfUnbound(auth(principal("123"))))
+        StepVerifier.create(handler().provisionIfUnbound(auth(principal("123")), null))
             .verifyComplete();
 
         verify(client).listAll(eq(UserConnection.class), any(ListOptions.class), any());
@@ -165,7 +165,7 @@ class BlogsClubProvisioningSafetyTest {
         when(client.listAll(eq(UserConnection.class), any(ListOptions.class), any()))
             .thenReturn(reactor.core.publisher.Flux.empty());
 
-        StepVerifier.create(h.provisionIfUnbound(auth(principal("123")))).verifyComplete();
+        StepVerifier.create(h.provisionIfUnbound(auth(principal("123")), null)).verifyComplete();
 
         verify(userService, never()).createUser(any(), any());
     }

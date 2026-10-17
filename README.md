@@ -58,7 +58,7 @@
 
 ### 手动安装 JAR
 
-1. Halo 后台「插件」→「上传插件」，选择 `plugin-blogsclub-1.3.3.jar`；
+1. Halo 后台「插件」→「上传插件」，选择 `plugin-blogsclub-1.4.0.jar`；
 2. 安装完成后**启用**插件；
 3. 进入「用户」→「认证方式」，找到 **BlogsClub** 并**启用**；
 4. 点击该条目的**「设置」**，填写 **AppID** 与 **AppKey**（见下方）。
@@ -93,11 +93,12 @@ https://你的站点域名/login/oauth2/code/blogsclub
 1. 博主点击「使用 BlogsClub 登录」，跳转授权页并同意授权；
 2. Halo 回调插件，插件用 AppID / AppKey 换取 `access_token`，并拉取博主资料；
 3. 若该 `openid` **已绑定**本站账号 → 直接登录，跳转个人中心；
-4. 若**未绑定** → 站点设置允许注册且存在默认角色时，插件创建 Halo 账号，并在建号前（`UserPreCreatingHandler`）把 BlogsClub 回调返回的 **邮箱 / 昵称 / 头像**写入新账号。资料按建号用户名严格关联，只会写入这一次创建的账号；邮箱直接来自刚刚完成认证的身份提供方，因此视为已提供、**无需再做邮箱验证**；
-5. 若站点关闭了「允许注册」或未配置默认角色 → 插件**不创建账号**，转而跳转到 Halo 原生绑定流程（`/login?oauth2_bind`），需先手动注册或登录本站账号再完成绑定；
-6. 完成后自动登录并跳转个人中心。
+4. 若**未绑定**且访客**未登录**本站 → 站点设置允许注册且存在默认角色时，插件创建 Halo 账号，并在建号前（`UserPreCreatingHandler`）把 BlogsClub 回调返回的 **邮箱 / 昵称 / 头像**写入新账号。资料按建号用户名严格关联，只会写入这一次创建的账号；邮箱直接来自刚刚完成认证的身份提供方，因此视为已提供、**无需再做邮箱验证**；
+5. 若**未绑定**且访客**已登录**本站（例如在个人中心「认证方式」里点绑定）→ 插件**不建新号**，由 Halo 内核把 BlogsClub 身份绑定到当前登录的账号（`MapOAuth2AuthenticationFilter` 的 PRE_AUTHENTICATION 分支），完成后仍是原账号处于登录状态；
+6. 若站点关闭了「允许注册」或未配置默认角色 → 插件**不创建账号**，转而跳转到 Halo 原生绑定流程（`/login?oauth2_bind`），需先手动注册或登录本站账号再完成绑定；
+7. 完成后自动登录并跳转个人中心。
 
-> 第 6 步的登录态由 Halo 内核的 OAuth2 映射过滤器完成：插件在回调中写好账号与绑定关系后，内核会把认证结果映射到真实账号上，并统一处理记住登录、设备记录等登录增强逻辑。
+> 登录态由 Halo 内核的 OAuth2 映射过滤器完成：插件在回调中写好账号与绑定关系后，内核会把认证结果映射到真实账号上，并统一处理记住登录、设备记录等登录增强逻辑。
 
 之后博主既可一键 BlogsClub 登录。由于账号是自动创建、没有设置过密码，若需要使用密码登录可在个人中心自行设置站点密码。
 
@@ -143,7 +144,7 @@ blogsclub:
 
 ```bash
 ./gradlew clean build
-# 产物：build/libs/plugin-blogsclub-1.3.3.jar
+# 产物：build/libs/plugin-blogsclub-1.4.0.jar
 ```
 
 运行单元测试：
@@ -163,7 +164,7 @@ src/main/java/io/github/ybrc114514/blogsclub/
   BlogsClubAuthorizationRequestResolver.java 授权请求参数解析
   BlogsClubOAuth2UserService.java             userinfo 适配器（解包 data / 映射 openid，token 仅走 header）
   BlogsClubClientRegistrationRepository.java  客户端注册仓库（AppID 读 ConfigMap，AppKey 存 Halo Secret）
-  BlogsClubAccountProvisioningHandler.java    判定当前认证身份是否需要建号
+  BlogsClubAccountProvisioningHandler.java    判定是否需要建号（已登录访客交回 Halo 绑定流程）
   BlogsClubAccountProvisioner.java            创建 User + 写入 UserConnection（遵循站点注册设置）
   BlogsClubUserPreCreatingHandler.java        建号前按用户名关联，写入 BlogsClub 邮箱 / 昵称 / 头像
   BlogsClubClientRegistration.java            客户端注册 Scheme 定义
@@ -182,6 +183,10 @@ src/main/resources/extensions/
 ```
 
 ## 更新日志
+
+### 1.4.0
+
+- **修复（生产事故：已登录用户无法绑定 BlogsClub 到已有账号）**：在用户中心对已注册账号执行「绑定 BlogsClub」时，插件会**新建一个空账号**并登录进去，而不是把 BlogsClub 身份绑定到当前账号（每次重试都会多出一个 `user-xxxxxx`）。根因：插件的建号处理器只看「该 openid 是否已绑定」，完全不区分访客是否已登录——而 Halo 内核的 `MapOAuth2AuthenticationFilter`（2.20 起）对已登录访客的未绑定身份有官方处理：它会在链路继续前缓存访客的登录态（PRE_AUTHENTICATION），链路结束后把身份绑定到该账号（`createUserConnection` + 会话重建）。插件的抢先建号把这套官方行为完全遮蔽了。现改为：回调过滤器在运行委托前先通过 `ServerSecurityContextRepository` 捕获访客当前登录态（信任解析器语义，与内核一致；匿名 / remember-me 令牌不算登录），已登录则**跳过建号**，由内核把 BlogsClub 身份绑定到该账号；匿名访客的首次登录自动建号行为不变。新增 8 个回归用例。
 
 ### 1.3.3
 - **修复（生产事故，与官方 OAuth2 插件共存的过滤器顺序）**：升级本插件后，全站 OAuth2 登录（含 BlogsClub 自身）全部 500。根因：Halo 按插件**加载顺序**排列各插件在同一扩展点上的过滤器，本插件每次升级/重载都会被重新排到链路末尾，于是官方插件的宽路径过滤器抢先处理所有 `/oauth2/authorization/*` 请求——它对 blogsclub 的 AuthProvider 配置（AppKey 已按 1.3.1 迁入 Halo 密钥）做严格校验失败而 500。现为两个过滤器添加 `@Order(0)`（Halo 核心用 `AnnotationAwareOrderComparator` 排序，注解生效），无论插件加载/升级顺序如何都排在其他无顺序注解的插件过滤器之前；配合 1.3.2 的路径守卫，外来请求仍原样转交官方插件处理。新增排序回归测试。

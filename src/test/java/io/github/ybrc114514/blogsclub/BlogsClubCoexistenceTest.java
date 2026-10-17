@@ -1,6 +1,7 @@
 package io.github.ybrc114514.blogsclub;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -146,6 +147,80 @@ class BlogsClubCoexistenceTest {
     }
 
     @Test
+    @DisplayName("回调过滤器在委托前把已登录访客的登录态存入 exchange 属性")
+    void callbackFilterStashesPreAuthenticationForSignedInVisitor() {
+        var signedIn = new org.springframework.security.authentication
+            .UsernamePasswordAuthenticationToken("user-existing", "n/a",
+            java.util.List.of(() -> "ROLE_USER"));
+        var securityContextRepository = mock(ServerSecurityContextRepository.class);
+        when(securityContextRepository.load(any())).thenReturn(
+            Mono.just(new org.springframework.security.core.context.SecurityContextImpl(signedIn)));
+        var filter = authenticationFilter(securityContextRepository);
+
+        var exchange = exchange("/login/oauth2/code/blogsclub?code=c&state=s");
+        // The delegate fails the fabricated callback (no saved authorization request), which is
+        // fine: the capture under test happens before it.
+        StepVerifier.create(filter.filter(exchange, chain(exchange))).verifyComplete();
+
+        assertThat(exchange.getAttributes())
+            .containsEntry(BlogsClubAuthenticationWebFilter.PRE_AUTHENTICATION_ATTRIBUTE, signedIn);
+    }
+
+    @Test
+    @DisplayName("匿名访客的回调不写入预登录态（保留首次登录建号行为）")
+    void callbackFilterLeavesPreAuthenticationEmptyForAnonymousVisitor() {
+        var securityContextRepository = mock(ServerSecurityContextRepository.class);
+        when(securityContextRepository.load(any())).thenReturn(Mono.empty());
+        var filter = authenticationFilter(securityContextRepository);
+
+        var exchange = exchange("/login/oauth2/code/blogsclub?code=c&state=s");
+        StepVerifier.create(filter.filter(exchange, chain(exchange))).verifyComplete();
+
+        assertThat(exchange.getAttributes())
+            .doesNotContainKey(BlogsClubAuthenticationWebFilter.PRE_AUTHENTICATION_ATTRIBUTE);
+    }
+
+    @Test
+    @DisplayName("匿名令牌不算已登录，回调不写入预登录态")
+    void callbackFilterIgnoresAnonymousPreAuthentication() {
+        var anonymous = new org.springframework.security.authentication
+            .AnonymousAuthenticationToken("key", "anonymousUser",
+            java.util.List.of(() -> "ROLE_ANONYMOUS"));
+        var securityContextRepository = mock(ServerSecurityContextRepository.class);
+        when(securityContextRepository.load(any())).thenReturn(
+            Mono.just(new org.springframework.security.core.context.SecurityContextImpl(anonymous)));
+        var filter = authenticationFilter(securityContextRepository);
+
+        var exchange = exchange("/login/oauth2/code/blogsclub?code=c&state=s");
+        StepVerifier.create(filter.filter(exchange, chain(exchange))).verifyComplete();
+
+        assertThat(exchange.getAttributes())
+            .doesNotContainKey(BlogsClubAuthenticationWebFilter.PRE_AUTHENTICATION_ATTRIBUTE);
+    }
+
+    @Test
+    @DisplayName("会话里残留的 OAuth2 令牌不算已登录，回调不写入预登录态")
+    void callbackFilterIgnoresOAuth2PreAuthentication() {
+        var oauth2Token = new org.springframework.security.oauth2.client.authentication
+            .OAuth2AuthenticationToken(oauth2User(), java.util.List.of(), "blogsclub");
+        var securityContextRepository = mock(ServerSecurityContextRepository.class);
+        when(securityContextRepository.load(any())).thenReturn(
+            Mono.just(new org.springframework.security.core.context.SecurityContextImpl(oauth2Token)));
+        var filter = authenticationFilter(securityContextRepository);
+
+        var exchange = exchange("/login/oauth2/code/blogsclub?code=c&state=s");
+        StepVerifier.create(filter.filter(exchange, chain(exchange))).verifyComplete();
+
+        assertThat(exchange.getAttributes())
+            .doesNotContainKey(BlogsClubAuthenticationWebFilter.PRE_AUTHENTICATION_ATTRIBUTE);
+    }
+
+    private static org.springframework.security.oauth2.core.user.OAuth2User oauth2User() {
+        return new org.springframework.security.oauth2.core.user.DefaultOAuth2User(
+            java.util.List.of(() -> "ROLE_USER"), java.util.Map.of("openid", "123"), "openid");
+    }
+
+    @Test
     @DisplayName("两个过滤器都排在无顺序注解的插件过滤器之前（复现 Halo 的排序）")
     void filtersSortAheadOfUnorderedPluginFilters() {
         // Exactly how Halo's SecurityWebFilterChainProxy orders the extensions of one
@@ -207,12 +282,17 @@ class BlogsClubCoexistenceTest {
     }
 
     private static BlogsClubAuthenticationWebFilter authenticationFilter() {
+        return authenticationFilter(mock(ServerSecurityContextRepository.class));
+    }
+
+    private static BlogsClubAuthenticationWebFilter authenticationFilter(
+        ServerSecurityContextRepository securityContextRepository) {
         var configuration = new BlogsClubLoginConfiguration(
             mock(ReactiveExtensionClient.class),
             mock(LoginHandlerEnhancer.class),
             mock(ExternalUrlSupplier.class));
         return new BlogsClubAuthenticationWebFilter(configuration,
-            mock(ServerSecurityContextRepository.class),
+            securityContextRepository,
             new OAuth2Properties(),
             mock(BlogsClubAccountProvisioningHandler.class));
     }
