@@ -187,6 +187,7 @@ src/main/resources/extensions/
 ### 1.4.2
 
 - **修复（v1.4.1 启动崩溃）**：v1.4.1 为测试注入增加了第二个（包私有）构造器，导致插件在 Halo 上**直接启动失败**：`BeanCreationException ... No default constructor found`（`NoSuchMethodException: <init>()`）。根因：Spring 的 `AutowiredAnnotationBeanPostProcessor` 在**存在多个构造器且没有任何 `@Autowired`** 时，会去寻找无参默认构造器——本类没有，启动即崩。v1.4.0 只有单个构造器，因此不受影响。现为公开构造器补上 `@Autowired`，钉死 Spring 的选择；包私有测试构造器保持不可见。新增回归用例，直接调用 Spring 的构造器选择逻辑断言选中的是公开的四参构造器。
+- **补充验证**：新增 `SchemeCoexistenceTest`（7 个用例），用 Halo 真实的 `SchemeManager` 契约驱动本插件真实的 `start()/stop()`，验证与官方 OAuth2 插件**共存、两种启动顺序、分别停用、反复启停**时官方资源类型始终不被注销——即审核意见要求验证的兼容性行为。单元测试总计 66 个。
 
 ### 1.4.1
 
