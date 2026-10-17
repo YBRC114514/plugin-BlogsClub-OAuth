@@ -9,12 +9,14 @@ import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.annotation.AnnotationAwareOrderComparator;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.lang.Nullable;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.security.authentication.ProviderNotFoundException;
@@ -215,6 +217,76 @@ class BlogsClubCoexistenceTest {
             .doesNotContainKey(BlogsClubAuthenticationWebFilter.PRE_AUTHENTICATION_ATTRIBUTE);
     }
 
+    @Test
+    @DisplayName("回调过滤器对已登录访客只订阅委托一次（v1.4.0 二次订阅回归）")
+    void callbackFilterSubscribesDelegateExactlyOnceForSignedInVisitor() {
+        var signedIn = new org.springframework.security.authentication
+            .UsernamePasswordAuthenticationToken("user-existing", "n/a",
+            java.util.List.of(() -> "ROLE_USER"));
+        var securityContextRepository = mock(ServerSecurityContextRepository.class);
+        when(securityContextRepository.load(any())).thenReturn(
+            Mono.just(new org.springframework.security.core.context.SecurityContextImpl(signedIn)));
+        var runs = new AtomicInteger();
+        var filter = authenticationFilter(securityContextRepository, countingDelegate(runs));
+
+        var exchange = exchange("/login/oauth2/code/blogsclub?code=c&state=s");
+        StepVerifier.create(filter.filter(exchange, chain(exchange))).verifyComplete();
+
+        // v1.4.0 composed the delegate with flatMap(...)+switchIfEmpty(...): the delegate is a
+        // Mono<Void> and therefore always completes empty, so the switchIfEmpty fired for every
+        // signed-in visitor and subscribed the delegate a second time — by then the
+        // authorization request had been removed from the session, so the second attempt failed
+        // with authorization_request_not_found and its error page overwrote the successful
+        // redirect. The blogger saw "登录失败" even though the bind had succeeded.
+        assertThat(runs).hasValue(1);
+        assertThat(exchange.getAttributes())
+            .containsEntry(BlogsClubAuthenticationWebFilter.PRE_AUTHENTICATION_ATTRIBUTE, signedIn);
+    }
+
+    @Test
+    @DisplayName("回调过滤器对匿名访客只订阅委托一次")
+    void callbackFilterSubscribesDelegateExactlyOnceForAnonymousVisitor() {
+        var securityContextRepository = mock(ServerSecurityContextRepository.class);
+        when(securityContextRepository.load(any())).thenReturn(Mono.empty());
+        var runs = new AtomicInteger();
+        var filter = authenticationFilter(securityContextRepository, countingDelegate(runs));
+
+        var exchange = exchange("/login/oauth2/code/blogsclub?code=c&state=s");
+        StepVerifier.create(filter.filter(exchange, chain(exchange))).verifyComplete();
+
+        assertThat(runs).hasValue(1);
+    }
+
+    @Test
+    @DisplayName("会话里残留的 OAuth2 令牌时也只订阅委托一次")
+    void callbackFilterSubscribesDelegateExactlyOnceForResidualOAuth2Token() {
+        var oauth2Token = new org.springframework.security.oauth2.client.authentication
+            .OAuth2AuthenticationToken(oauth2User(), java.util.List.of(), "blogsclub");
+        var securityContextRepository = mock(ServerSecurityContextRepository.class);
+        when(securityContextRepository.load(any())).thenReturn(
+            Mono.just(new org.springframework.security.core.context.SecurityContextImpl(oauth2Token)));
+        var runs = new AtomicInteger();
+        var filter = authenticationFilter(securityContextRepository, countingDelegate(runs));
+
+        var exchange = exchange("/login/oauth2/code/blogsclub?code=c&state=s");
+        StepVerifier.create(filter.filter(exchange, chain(exchange))).verifyComplete();
+
+        assertThat(runs).hasValue(1);
+    }
+
+    /**
+     * Stand-in for the internal {@code OAuth2LoginAuthenticationWebFilter} delegate that counts
+     * its subscriptions and completes empty — exactly like the real one, whose {@code Mono<Void>}
+     * completion is what a {@code switchIfEmpty} downstream of it would misread as "nothing
+     * happened" and re-subscribe (v1.4.0 production incident).
+     */
+    private static WebFilter countingDelegate(AtomicInteger runs) {
+        return (exchange, chain) -> {
+            runs.incrementAndGet();
+            return Mono.empty();
+        };
+    }
+
     private static org.springframework.security.oauth2.core.user.OAuth2User oauth2User() {
         return new org.springframework.security.oauth2.core.user.DefaultOAuth2User(
             java.util.List.of(() -> "ROLE_USER"), java.util.Map.of("openid", "123"), "openid");
@@ -287,6 +359,12 @@ class BlogsClubCoexistenceTest {
 
     private static BlogsClubAuthenticationWebFilter authenticationFilter(
         ServerSecurityContextRepository securityContextRepository) {
+        return authenticationFilter(securityContextRepository, null);
+    }
+
+    private static BlogsClubAuthenticationWebFilter authenticationFilter(
+        ServerSecurityContextRepository securityContextRepository,
+        @Nullable WebFilter delegateOverride) {
         var configuration = new BlogsClubLoginConfiguration(
             mock(ReactiveExtensionClient.class),
             mock(LoginHandlerEnhancer.class),
@@ -294,7 +372,8 @@ class BlogsClubCoexistenceTest {
         return new BlogsClubAuthenticationWebFilter(configuration,
             securityContextRepository,
             new OAuth2Properties(),
-            mock(BlogsClubAccountProvisioningHandler.class));
+            mock(BlogsClubAccountProvisioningHandler.class),
+            delegateOverride);
     }
 
     private static WebFilterChain chain(MockServerWebExchange exchange) {

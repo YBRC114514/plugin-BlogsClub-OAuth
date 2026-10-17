@@ -58,7 +58,7 @@
 
 ### 手动安装 JAR
 
-1. Halo 后台「插件」→「上传插件」，选择 `plugin-blogsclub-1.4.0.jar`；
+1. Halo 后台「插件」→「上传插件」，选择 `plugin-blogsclub-1.4.1.jar`；
 2. 安装完成后**启用**插件；
 3. 进入「用户」→「认证方式」，找到 **BlogsClub** 并**启用**；
 4. 点击该条目的**「设置」**，填写 **AppID** 与 **AppKey**（见下方）。
@@ -144,7 +144,7 @@ blogsclub:
 
 ```bash
 ./gradlew clean build
-# 产物：build/libs/plugin-blogsclub-1.4.0.jar
+# 产物：build/libs/plugin-blogsclub-1.4.1.jar
 ```
 
 运行单元测试：
@@ -183,6 +183,10 @@ src/main/resources/extensions/
 ```
 
 ## 更新日志
+
+### 1.4.1
+
+- **修复（生产事故：绑定成功却显示「登录失败」）**：v1.4.0 为「已登录用户绑定 BlogsClub」增加了预登录态捕获，但把委托过滤器用 `flatMap(...)+switchIfEmpty(...)` 组合——委托返回的是 `Mono<Void>`，**永远以空信号完成**，于是已登录访客走完整个 OAuth2 流程（授权码换令牌、绑定关系由内核写入）后，外层链路误判「空」并把委托**再订阅一次**；此时授权请求已被移出会话，第二次尝试必然抛 `authorization_request_not_found`，其错误页覆盖了第一次成功的重定向。表现为：绑定实际成功，但页面显示「BlogsClub 登录失败 [authorization_request_not_found]」。现改为 `then()` 组合：无论是否捕获到登录态，委托都只运行一次；匿名访客的首次登录自动建号行为不变。新增 3 个「委托只订阅一次」回归用例（已登录 / 匿名 / 会话残留 OAuth2 令牌）。
 
 ### 1.4.0
 

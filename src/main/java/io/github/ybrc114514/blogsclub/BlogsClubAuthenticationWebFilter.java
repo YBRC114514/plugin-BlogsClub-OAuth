@@ -56,7 +56,8 @@ import run.halo.app.security.authentication.oauth2.HaloOAuth2AuthenticationToken
  * {@code MapOAuth2AuthenticationFilter} binds an unbound BlogsClub identity to that very account
  * ({@code createUserConnection} plus session establish), which is the official behaviour.
  * Provisioning here is reserved for anonymous visitors, the "sign in and an account is created
- * for you" case this plugin advertises.</p>
+ * for you" case this plugin advertises. The capture is composed with {@code then()}, so the
+ * delegate runs exactly once for signed-in and anonymous visitors alike.</p>
  *
  * <p>The filter is registered as a global {@link AuthenticationSecurityWebFilter} and therefore
  * sees every request of the site, so its error handling is restricted to the BlogsClub callback —
@@ -87,6 +88,23 @@ public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityW
         ServerSecurityContextRepository securityContextRepository,
         OAuth2Properties oAuth2Properties,
         BlogsClubAccountProvisioningHandler provisioningHandler) {
+        this(configuration, securityContextRepository, oAuth2Properties, provisioningHandler, null);
+    }
+
+    /**
+     * Package-private constructor for tests: the last parameter replaces the internally built
+     * {@link OAuth2LoginAuthenticationWebFilter} delegate, so a test can count how often the
+     * delegate is subscribed. The delegate is a {@code Mono<Void>} and therefore always
+     * completes <em>empty</em>; composing it with {@code switchIfEmpty} subscribed it twice for
+     * signed-in visitors — production incident 2026-10-17 (v1.4.0): the bind itself succeeded,
+     * but the second attempt failed with {@code authorization_request_not_found} and its error
+     * page overwrote the successful redirect.
+     */
+    BlogsClubAuthenticationWebFilter(BlogsClubLoginConfiguration configuration,
+        ServerSecurityContextRepository securityContextRepository,
+        OAuth2Properties oAuth2Properties,
+        BlogsClubAccountProvisioningHandler provisioningHandler,
+        @Nullable WebFilter delegateOverride) {
         this.securityContextRepository = securityContextRepository;
 
         var proxy = oAuth2Properties.getProxy();
@@ -176,7 +194,7 @@ public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityW
         filter.setServerAuthenticationConverter(converter);
         filter.setSecurityContextRepository(securityContextRepository);
 
-        this.delegate = filter;
+        this.delegate = delegateOverride != null ? delegateOverride : filter;
     }
 
     /**
@@ -238,15 +256,18 @@ public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityW
         // chain), so the repository load below returns the session's sign-in for a signed-in
         // visitor and completes empty for an anonymous one. An OAuth2 token itself is not a
         // sign-in here — mirroring how core's PRE_AUTHENTICATION excludes it.
-        return securityContextRepository.load(exchange)
-            .mapNotNull(SecurityContext::getAuthentication)
-            .filter(authentication -> TRUST_RESOLVER.isAuthenticated(authentication))
-            .filter(authentication -> !(authentication instanceof OAuth2AuthenticationToken))
-            .flatMap(authentication -> {
-                exchange.getAttributes().put(PRE_AUTHENTICATION_ATTRIBUTE, authentication);
-                return delegate.filter(exchange, chain);
-            })
-            .switchIfEmpty(delegate.filter(exchange, chain))
+        //
+        // Compose with then(), never with flatMap(...)+switchIfEmpty(...): the delegate is a
+        // Mono<Void> and therefore always completes *empty*, so a switchIfEmpty downstream of
+        // it fires for every signed-in visitor and subscribes the delegate a second time — by
+        // which point the authorization request has already been removed from the session, so
+        // the second attempt fails with authorization_request_not_found and its error page
+        // overwrites the successful first run's redirect. That is exactly what v1.4.0 shipped:
+        // the bind succeeded server-side, yet the blogger saw "BlogsClub 登录失败
+        // [authorization_request_not_found]". then() subscribes the delegate exactly once,
+        // whether the capture found a sign-in or not.
+        return capturePreAuthentication(exchange)
+            .then(delegate.filter(exchange, chain))
             .onErrorResume(BlogsClubConfigException.class, e -> notice(exchange,
                 "尚未完成 BlogsClub 配置", NOTICE))
             .onErrorResume(e -> {
@@ -254,6 +275,24 @@ public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityW
                 return error(exchange, "BlogsClub 登录失败",
                     e.getMessage() == null ? e.getClass().getName() : e.getMessage());
             });
+    }
+
+    /**
+     * Stashes the visitor's current sign-in — if any — into {@link #PRE_AUTHENTICATION_ATTRIBUTE}
+     * before the delegate runs. A successful OAuth2 login overwrites the security context with
+     * the raw OAuth2 token, so without this capture a signed-in blogger binding BlogsClub would
+     * be indistinguishable from an anonymous one.
+     *
+     * <p>Completes empty for anonymous visitors, which is exactly what the {@code then()} in
+     * {@link #filter} needs: the delegate runs exactly once in either case.</p>
+     */
+    private Mono<Authentication> capturePreAuthentication(ServerWebExchange exchange) {
+        return securityContextRepository.load(exchange)
+            .mapNotNull(SecurityContext::getAuthentication)
+            .filter(authentication -> TRUST_RESOLVER.isAuthenticated(authentication))
+            .filter(authentication -> !(authentication instanceof OAuth2AuthenticationToken))
+            .doOnNext(authentication ->
+                exchange.getAttributes().put(PRE_AUTHENTICATION_ATTRIBUTE, authentication));
     }
 
     private static final String NOTICE = """
