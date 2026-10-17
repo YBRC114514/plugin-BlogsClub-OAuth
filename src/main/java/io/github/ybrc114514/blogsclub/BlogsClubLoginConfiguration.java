@@ -1,7 +1,5 @@
 package io.github.ybrc114514.blogsclub;
 
-import static org.springframework.security.oauth2.core.endpoint.OAuth2ParameterNames.REGISTRATION_ID;
-
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -72,8 +70,13 @@ public class BlogsClubLoginConfiguration {
         }
 
         ServerWebExchangeMatcher createAttemptAuthenticationRequestMatcher() {
+            // The literal BlogsClub callback path on purpose. The generic
+            // "/login/oauth2/code/{registrationId}" pattern is shared by every OAuth2 plugin —
+            // the official plugin-oauth2's github / gitlab / gitee callbacks included — and
+            // matching broadly pulled those foreign callbacks into this filter, where our
+            // repository then failed them: the site lost all third-party logins but ours.
             return new PathPatternParserServerWebExchangeMatcher(
-                "/login/oauth2/code/{" + REGISTRATION_ID + "}");
+                "/login/oauth2/code/" + BlogsClubClientRegistrationRepository.REGISTRATION_ID);
         }
 
         ReactiveClientRegistrationRepository getClientRegistrationRepository() {

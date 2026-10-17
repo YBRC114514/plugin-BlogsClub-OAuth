@@ -23,6 +23,7 @@
 - 已绑定用户直接登录；个人中心可随时绑定 / 解绑 BlogsClub 账号
 - AppID / AppKey 未配置时显示中文提示页，而不是抛出空白 500 错误
 - 支持弹窗（popup）模式：`/oauth2/authorization/blogsclub?display=popup`
+- 与 Halo 官方 OAuth2 插件（plugin-oauth2）**共存**：两者的登录方式互不拦截——官方插件的 github / gitlab / gitee 走官方链路，BlogsClub 走本插件链路（本插件只处理 `/oauth2/authorization/blogsclub` 与 `/login/oauth2/code/blogsclub`，其余 registration 原样放行）
 
 ## 隐私与数据说明
 
@@ -57,7 +58,7 @@
 
 ### 手动安装 JAR
 
-1. Halo 后台「插件」→「上传插件」，选择 `plugin-blogsclub-1.3.0.jar`；
+1. Halo 后台「插件」→「上传插件」，选择 `plugin-blogsclub-1.3.2.jar`；
 2. 安装完成后**启用**插件；
 3. 进入「用户」→「认证方式」，找到 **BlogsClub** 并**启用**；
 4. 点击该条目的**「设置」**，填写 **AppID** 与 **AppKey**（见下方）。
@@ -142,7 +143,7 @@ blogsclub:
 
 ```bash
 ./gradlew clean build
-# 产物：build/libs/plugin-blogsclub-1.3.1.jar
+# 产物：build/libs/plugin-blogsclub-1.3.2.jar
 ```
 
 运行单元测试：
@@ -181,6 +182,10 @@ src/main/resources/extensions/
 ```
 
 ## 更新日志
+
+### 1.3.2
+
+- **修复（生产事故，与官方 OAuth2 插件共存）**：两插件同时启用时，本站的 github / gitlab / gitee 等第三方登录全部失败——绑定已有账号时直接 500，报错 `Oauth2 client registration github not found`（该异常由本插件的客户端注册库抛出）。根因：本插件的授权跳转过滤器与回调过滤器挂在所有 OAuth2 插件**共用**的宽路径（`/oauth2/authorization/{registrationId}`、`/login/oauth2/code/{registrationId}`）上，把官方插件的 registration 也拿到自己的注册库里解析并报错，等于劫持了全站除 BlogsClub 外的所有第三方登录。现改为：① 客户端注册库对非 BlogsClub 的 registration 一律返回空（放行给对应插件处理）；② 授权跳转过滤器只处理 BlogsClub 自己的授权路径，其余直接转交链路下游；③ 回调匹配器收窄为 BlogsClub 自己的回调路径。新增 `BlogsClubCoexistenceTest` 5 个用例固化该行为。
 
 ### 1.3.1
 

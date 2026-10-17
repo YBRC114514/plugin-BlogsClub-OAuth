@@ -75,6 +75,15 @@ public class BlogsClubClientRegistrationRepository implements ReactiveClientRegi
 
     @Override
     public Mono<ClientRegistration> findByRegistrationId(String registrationId) {
+        if (!REGISTRATION_ID.equals(registrationId)) {
+            // Another plugin's registration. The official plugin-oauth2 serves github /
+            // gitlab / gitee under these very endpoints, and its filters wrap the whole
+            // request chain exactly like ours, so an exception here hijacked every foreign
+            // third-party login on the site (production incident 2026-10-17: binding github
+            // failed with "Oauth2 client registration github not found" thrown by this
+            // method). Empty means "not mine" and lets the other plugin's filter answer.
+            return Mono.empty();
+        }
         return client.fetch(AuthProvider.class, registrationId)
             .switchIfEmpty(Mono.error(new ProviderNotFoundException(
                 "Unsupported OAuth2 provider: " + registrationId)))

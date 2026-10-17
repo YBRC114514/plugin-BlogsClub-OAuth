@@ -14,6 +14,12 @@ import run.halo.app.security.HttpBasicSecurityWebFilter;
  * BlogsClub authorization endpoint. Uses {@link BlogsClubAuthorizationRequestResolver} so that
  * the {@code display=popup} parameter is forwarded for BlogsClub's popup login mode.
  *
+ * <p>The delegate is only ever run for the BlogsClub authorization endpoint. Other OAuth2
+ * plugins — the official plugin-oauth2 with its github / gitlab / gitee clients — publish
+ * their own registrations under the same {@code /oauth2/authorization/{registrationId}} path
+ * and wrap the whole chain just like this filter; running the delegate for those paths used
+ * to resolve them through our repository and fail them with our error page.</p>
+ *
  * @since 1.0.0
  */
 @Slf4j
@@ -36,14 +42,20 @@ public class BlogsClubRedirectWebFilter implements HttpBasicSecurityWebFilter {
      */
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
-        var result = delegate.filter(exchange, chain);
         if (!BlogsClubRequests.isAuthorization(exchange)) {
-            // Not ours: keep Halo's own error pages for the rest of the site.
-            return result;
+            // Not our authorization endpoint — and that includes every other OAuth2 plugin's
+            // endpoints: the official plugin-oauth2 serves github / gitlab / gitee under the
+            // same /oauth2/authorization/{registrationId} path, and its filters wrap the whole
+            // chain just like ours. Running the delegate here would resolve those foreign
+            // registration ids through our repository and fail them with our error, taking
+            // down every third-party login on the site but BlogsClub's own. Hand them
+            // straight to the next filter in the chain.
+            return chain.filter(exchange);
         }
+        var result = delegate.filter(exchange, chain);
         // An incomplete AppID / AppKey used to surface as a raw HTTP 500 on the very first
-        // hop of the login flow. Let the delegate pass it through; the OAuth2 callback filter
-        // renders a readable page for the same condition.
+        // hop of the login flow. The delegate passes the error through, and this renders a
+        // readable page for the BlogsClub authorization endpoint only.
         return result
             .onErrorResume(e -> {
                 log.error("[BlogsClub] 发起授权跳转时出错", e);
