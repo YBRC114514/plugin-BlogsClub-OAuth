@@ -17,18 +17,24 @@ import run.halo.app.core.user.service.UserPreCreatingHandler;
  *
  * <p><b>How the profile is bound to the account.</b> Halo provisions the account inside its own
  * OAuth2 filter chain and only afterwards invokes {@link UserPreCreatingHandler}. That hook receives
- * the {@link User} but neither the OAuth2 principal nor the WebSession, and the generated username
- * is random ({@code user-ylitqejf}), so nothing on the incoming {@code User} identifies which
- * BlogsClub identity is being registered. Guessing — by matching the display name, the e-mail, or
- * "the only profile still waiting" — risks writing one blogger's e-mail onto another blogger's
- * account whenever two registrations overlap.</p>
+ * the {@link User} but neither the OAuth2 principal nor any request context, and the generated
+ * username is random ({@code user-ylitqejf}), so nothing on the incoming {@code User} identifies
+ * which BlogsClub identity is being registered — unless the plugin makes that link itself.
  *
- * <p>Instead, {@link #remember} parks the profile under the verified BlogsClub identity (its
- * {@code openid}) <em>together with</em> the id of the session that authenticated it, and
- * {@link #preCreating} hands the profile back only when the session creating the account is the very
- * same one that authenticated. A profile can therefore never leak across users or sessions, and when
- * the association cannot be proven the account is simply created without backfill rather than with
- * somebody else's data.</p>
+ * <p>{@link BlogsClubAccountProvisioner} generates the username and parks the profile under
+ * <em>that very username</em> right before calling {@code UserService#createUser}. Halo then hands
+ * the same {@code User} (carrying {@code metadata.name}) to {@link #preCreating}, which claims the
+ * profile by name. The association is therefore carried inside the object Halo itself passes
+ * through its reactive chain — no session id, no thread-local state, nothing that a reactive
+ * thread hop could drop. A profile can only ever be claimed by the one account it was parked for,
+ * so one blogger's e-mail can never land on another blogger's account, and when no profile was
+ * parked the account is simply created without backfill.</p>
+ *
+ * <p>An earlier revision keyed the profile by the web session id read from a thread-local. That
+ * value was set on the Netty event-loop thread but read back inside Halo's {@code createUser}
+ * chain, which by then had already moved onto R2DBC worker threads — so the backfill silently
+ * never happened. Keying by the username Halo is about to create removes that failure mode
+ * entirely.</p>
  *
  * <p>Entries are removed as soon as they are claimed and expire on their own, so the map stays
  * small. Only blank fields are filled; anything already set is left untouched.</p>
@@ -46,13 +52,12 @@ public class BlogsClubUserPreCreatingHandler implements UserPreCreatingHandler {
     private static final Duration MAX_AGE = Duration.ofMinutes(10);
 
     /**
-     * Verified profile, keyed by the BlogsClub {@code openid} that authenticated it.
+     * Verified profile, keyed by the username of the account it may be written onto.
      *
      * @param attributes BlogsClub userinfo attributes
-     * @param sessionId  id of the web session that completed the OAuth2 exchange
      * @param parkedAt   creation timestamp in milliseconds
      */
-    private record ParkedProfile(Map<String, Object> attributes, String sessionId, long parkedAt) {
+    private record ParkedProfile(Map<String, Object> attributes, long parkedAt) {
 
         boolean isExpired() {
             return System.currentTimeMillis() - parkedAt > MAX_AGE.toMillis();
@@ -62,20 +67,14 @@ public class BlogsClubUserPreCreatingHandler implements UserPreCreatingHandler {
     private final Map<String, ParkedProfile> pendingProfiles = new ConcurrentHashMap<>();
 
     /**
-     * Parks the BlogsClub attributes of an identity that has just authenticated, so the account Halo
-     * is about to create can pick them up.
+     * Parks the BlogsClub attributes of an identity that is about to get an account, keyed by the
+     * username that account will be created under.
      *
-     * <p>The profile is bound to {@code sessionId}: only an account created by the same session that
-     * authenticated at BlogsClub may claim it.</p>
-     *
-     * @param registrationId OAuth2 registration id; only BlogsClub is relevant
-     * @param principal      the authenticated BlogsClub principal
-     * @param sessionId      id of the web session the OAuth2 exchange happened in
+     * @param username  the name of the account {@code createUser} is about to create
+     * @param principal the authenticated BlogsClub principal
      */
-    public void remember(String registrationId, OAuth2User principal, String sessionId) {
-        if (!BlogsClubClientRegistrationRepository.REGISTRATION_ID.equals(registrationId)
-            || principal == null
-            || !StringUtils.hasText(sessionId)) {
+    public void remember(String username, OAuth2User principal) {
+        if (!StringUtils.hasText(username) || principal == null) {
             return;
         }
         String openId = principal.getName();
@@ -83,21 +82,32 @@ public class BlogsClubUserPreCreatingHandler implements UserPreCreatingHandler {
             return;
         }
         evictExpired();
-        if (!pendingProfiles.containsKey(openId) && pendingProfiles.size() >= MAX_CACHE_SIZE) {
+        if (!pendingProfiles.containsKey(username) && pendingProfiles.size() >= MAX_CACHE_SIZE) {
             // Drop the oldest entry so a burst of concurrent logins still gets handled.
             pendingProfiles.entrySet().stream()
                 .min(java.util.Comparator.comparingLong(e -> e.getValue().parkedAt()))
                 .map(Map.Entry::getKey)
                 .ifPresent(pendingProfiles::remove);
         }
-        pendingProfiles.put(openId, new ParkedProfile(
-            Map.copyOf(principal.getAttributes()), sessionId, System.currentTimeMillis()));
-        log.debug("[BlogsClub] 已缓存 BlogsClub 资料，等待建号时回填：openid={}", openId);
+        pendingProfiles.put(username, new ParkedProfile(
+            Map.copyOf(principal.getAttributes()), System.currentTimeMillis()));
+        log.debug("[BlogsClub] 已缓存 BlogsClub 资料，等待建号时回填：username={}", username);
+    }
+
+    /**
+     * Drops a parked profile that will never be claimed, e.g. because account creation failed.
+     *
+     * @param username the name the profile was parked under
+     */
+    public void forget(String username) {
+        if (username != null) {
+            pendingProfiles.remove(username);
+        }
     }
 
     @Override
     public Mono<Void> preCreating(User user) {
-        Map<String, Object> attributes = claim();
+        Map<String, Object> attributes = claim(user);
         if (attributes == null) {
             return Mono.empty();
         }
@@ -108,43 +118,28 @@ public class BlogsClubUserPreCreatingHandler implements UserPreCreatingHandler {
     }
 
     /**
-     * Claims the parked profile that provably belongs to the session creating the account.
+     * Claims the profile parked for the account Halo is about to create.
      *
-     * <p>This is the only place a profile may be handed out. It demands an unambiguous association
-     * with the current session: when zero or several profiles are waiting for it, the account is
-     * created without backfill rather than with data that belongs to somebody else.</p>
+     * <p>The only association needed is the username, which {@link BlogsClubAccountProvisioner}
+     * generated and Halo carries on the very {@code User} handed to this hook. A profile that was
+     * never parked — or one that belongs to a different account — is simply not returned, so the
+     * account is created without backfill rather than with somebody else's data.</p>
      *
-     * @return the BlogsClub attributes when they can be attributed to the current session
+     * @return the BlogsClub attributes when a profile was parked for this exact account
      */
-    private Map<String, Object> claim() {
+    private Map<String, Object> claim(User user) {
         evictExpired();
         if (pendingProfiles.isEmpty()) {
             return null;
         }
-        String currentSessionId = BlogsClubSessionContext.currentSessionId();
-        if (currentSessionId == null) {
-            // No session to attribute the profile to; never guess.
-            log.info("[BlogsClub] 建号时无法确定当前会话，跳过资料回填");
+        var username = user.getMetadata().getName();
+        var claimed = pendingProfiles.remove(username);
+        if (claimed == null) {
+            log.info("[BlogsClub] 建号时未找到与该账号关联的 BlogsClub 资料，跳过回填：username={}",
+                username);
             return null;
         }
-        String matchedKey = null;
-        for (var entry : pendingProfiles.entrySet()) {
-            if (!currentSessionId.equals(entry.getValue().sessionId())) {
-                continue;
-            }
-            if (matchedKey != null) {
-                // Ambiguous: two identities raced on one session. Skip rather than mis-attribute.
-                log.warn("[BlogsClub] 建号时同一会话存在多份 BlogsClub 资料，跳过回填以避免错配");
-                return null;
-            }
-            matchedKey = entry.getKey();
-        }
-        if (matchedKey == null) {
-            log.info("[BlogsClub] 建号时未找到与当前会话关联的 BlogsClub 资料，跳过回填");
-            return null;
-        }
-        var claimed = pendingProfiles.remove(matchedKey);
-        log.debug("[BlogsClub] 建号时已按会话关联到 BlogsClub 资料：openid={}", matchedKey);
+        log.debug("[BlogsClub] 建号时已按账号关联到 BlogsClub 资料：username={}", username);
         return claimed.attributes();
     }
 

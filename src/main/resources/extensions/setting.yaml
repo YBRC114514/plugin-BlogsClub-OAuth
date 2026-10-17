@@ -16,4 +16,4 @@ spec:
           name: clientSecret
           label: "AppKey（Client Secret）"
           validation: required:trim
-          help: "在 BlogsClub 开放平台创建应用后获得的 AppKey，服务端换取 access_token 时使用。此处以密文显示，不会明文展示。"
+          help: "在 BlogsClub 开放平台创建应用后获得的 AppKey，服务端换取 access_token 时使用。此处以密文显示，不会明文展示；保存后插件会将其转入 Halo 密钥（Secret）中保管。"

@@ -22,7 +22,6 @@ import reactor.core.publisher.Mono;
 import reactor.netty.http.client.HttpClient;
 import reactor.netty.transport.ProxyProvider;
 import run.halo.app.security.AuthenticationSecurityWebFilter;
-import run.halo.app.security.LoginHandlerEnhancer;
 import run.halo.app.security.authentication.oauth2.HaloOAuth2AuthenticationToken;
 
 /**
@@ -30,24 +29,28 @@ import run.halo.app.security.authentication.oauth2.HaloOAuth2AuthenticationToken
  * {@code /login/oauth2/code/blogsclub}, exchanges the authorization code for an access token and
  * loads the BlogsClub profile through {@link BlogsClubOAuth2UserService}.
  *
- * <p>On success the filter does three things in order:</p>
+ * <p>On success the filter does two things in order:</p>
  * <ol>
  *   <li>{@link BlogsClubAccountProvisioningHandler} provisions an account when this BlogsClub
  *       identity is not bound to one yet. Halo's own OAuth2 handling would only drop the visitor into
  *       the manual {@code /login?oauth2_bind} flow, which is not what this plugin advertises.</li>
- *   <li>Halo's {@code LoginHandlerEnhancer} is invoked so remember-me, device management and Halo's
- *       login bookkeeping keep working. This has to be done here rather than by implementing that
- *       interface: it is not a pf4j extension point and Halo resolves a single main-context bean for
- *       it, so a plugin implementation would never be called.</li>
  *   <li>The request is redirected into the user centre.</li>
  * </ol>
  *
- * <p>Two details matter for correctness. First, the BlogsClub profile is parked before provisioning
- * so {@link BlogsClubUserPreCreatingHandler} can write the e-mail, nickname and avatar onto the new
- * account from inside Halo's own {@code createUser} call. Second, the filter is registered as a
- * global {@link AuthenticationSecurityWebFilter} and therefore sees every request of the site, so
- * its error handling is restricted to the BlogsClub callback — otherwise it would replace Halo's own
- * 404 and 500 pages.</p>
+ * <p>Everything after that — mapping the OAuth2 token onto the provisioned account, remember-me,
+ * device management and Halo's login bookkeeping — is deliberately <em>not</em> done here. Halo
+ * core registers {@code MapOAuth2AuthenticationFilter} for every request; once this filter has
+ * saved the {@link OAuth2AuthenticationToken} into the security context (which
+ * {@link OAuth2LoginAuthenticationWebFilter} does on success), that core filter resolves the
+ * {@code UserConnection} this plugin just wrote, re-maps the authentication onto the real Halo
+ * account and invokes Halo's {@code LoginHandlerEnhancer} exactly once with the correct, mapped
+ * authentication. Calling the enhancer here as well would fire it twice — and the first time with a
+ * raw OAuth2 token whose name is the opaque openid rather than a Halo username, so Halo would
+ * record a login event for an account that does not exist.</p>
+ *
+ * <p>The filter is registered as a global {@link AuthenticationSecurityWebFilter} and therefore
+ * sees every request of the site, so its error handling is restricted to the BlogsClub callback —
+ * otherwise it would replace Halo's own 404 and 500 pages.</p>
  *
  * @since 1.0.0
  */
@@ -60,9 +63,7 @@ public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityW
     public BlogsClubAuthenticationWebFilter(BlogsClubLoginConfiguration configuration,
         ServerSecurityContextRepository securityContextRepository,
         OAuth2Properties oAuth2Properties,
-        BlogsClubUserPreCreatingHandler profileHandler,
-        BlogsClubAccountProvisioningHandler provisioningHandler,
-        LoginHandlerEnhancer loginHandlerEnhancer) {
+        BlogsClubAccountProvisioningHandler provisioningHandler) {
 
         var proxy = oAuth2Properties.getProxy();
         if (proxy.isEnabled()) {
@@ -107,25 +108,12 @@ public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityW
             accessTokenResponseClient,
             new BlogsClubOAuth2UserService(webClient)
         );
-        // Park the profile right after the token/userinfo exchange. This is the last point before
-        // an account is provisioned, so the BlogsClub e-mail is available in time to be written
-        // onto the new account by BlogsClubUserPreCreatingHandler (which Halo calls from inside
-        // UserService#createUser).
-        //
         // The authentication result type must be unwrapped defensively: depending on where this
         // manager sits in the chain the result is either a plain OAuth2AuthenticationToken or
         // Halo's HaloOAuth2AuthenticationToken wrapper (which keeps the original in
         // getOriginal()).
         org.springframework.security.authentication.ReactiveAuthenticationManager authManager =
-            authentication -> tokenEndpoint.authenticate(authentication)
-                .doOnNext(authenticated -> {
-                    var token = unwrapOAuth2Token(authenticated);
-                    if (token != null) {
-                        profileHandler.remember(
-                            token.getAuthorizedClientRegistrationId(), token.getPrincipal(),
-                            BlogsClubSessionContext.currentSessionId());
-                    }
-                });
+            authentication -> tokenEndpoint.authenticate(authentication);
 
         var filter = new OAuth2LoginAuthenticationWebFilter(
             authManager, configuration.getAuthorizedClientRepository());
@@ -138,20 +126,18 @@ public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityW
         successHandler.setRequestCache(configuration.getRequestCache());
         // Account provisioning has to run before the redirect is issued: an unbound BlogsClub
         // identity needs a User to be bound to, and it is this filter — not Halo's OAuth2 chain —
-        // that can create one. Halo's LoginHandlerEnhancer is then forwarded so its remember-me,
-        // device and login bookkeeping still apply to the new session.
+        // that can create one.
         //
-        // The raw OAuth2 token is what this filter's own chain produced; Halo's wrapper is built
-        // later by MapOAuth2AuthenticationFilter, which cannot run before the redirect here. The
-        // provisioning handler therefore accepts the plain token too, and the enhancer is called
-        // with the raw token because the freshly created account has no UserDetails yet — Halo's
-        // enhancer only needs the authentication to record the login event.
-        filter.setAuthenticationSuccessHandler((webFilterExchange, authentication) -> {
-            var exchange = webFilterExchange.getExchange();
-            return provisioningHandler.provisionIfUnbound(authentication)
-                .then(loginHandlerEnhancer.onLoginSuccess(exchange, authentication))
-                .then(successHandler.onAuthenticationSuccess(webFilterExchange, authentication));
-        });
+        // No LoginHandlerEnhancer call here on purpose: Halo core's MapOAuth2AuthenticationFilter
+        // runs after this chain completes, finds the UserConnection this filter just wrote, maps
+        // the authentication onto the real account and then calls the enhancer once with the
+        // mapped authentication. When no account could be provisioned (e.g. the site closed
+        // registration), that same core filter logs the visitor out and sends them to
+        // /login?oauth2_bind — Halo's native binding flow — which is exactly the documented
+        // fallback behaviour.
+        filter.setAuthenticationSuccessHandler((webFilterExchange, authentication) ->
+            provisioningHandler.provisionIfUnbound(authentication)
+                .then(successHandler.onAuthenticationSuccess(webFilterExchange, authentication)));
         filter.setAuthenticationFailureHandler(
             new org.springframework.security.web.server.authentication
                 .RedirectServerAuthenticationFailureHandler("/login?blogsclub_error"));
@@ -194,12 +180,7 @@ public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityW
             // 404 or 500 page.
             return result;
         }
-        // Bind this session to the request thread so the profile parked by the authentication
-        // manager can only ever be claimed by an account created in this very session.
-        return BlogsClubSessionContext.resolveSessionId(exchange)
-            .doOnNext(BlogsClubSessionContext::bind)
-            .then(result)
-            .doFinally(signal -> BlogsClubSessionContext.clear())
+        return result
             .onErrorResume(BlogsClubConfigException.class, e -> notice(exchange,
                 "尚未完成 BlogsClub 配置", NOTICE))
             .onErrorResume(e -> {

@@ -39,7 +39,8 @@ class BlogsClubProvisioningSafetyTest {
     private BlogsClubAccountProvisioningHandler handler() {
         var userService = mock(run.halo.app.core.user.service.UserService.class);
         return new BlogsClubAccountProvisioningHandler(client,
-            new BlogsClubAccountProvisioner(client, userService));
+            new BlogsClubAccountProvisioner(client, userService,
+                new BlogsClubUserPreCreatingHandler()));
     }
 
     private static OAuth2User principal(String openId) {
@@ -85,18 +86,32 @@ class BlogsClubProvisioningSafetyTest {
     }
 
     @Test
-    @DisplayName("会话 id 缺失时返回 null 而非伪造一个通用 id")
-    void doesNotFabricateSessionId() {
-        // A session that reports no id: resolveSessionId must complete empty so the caller skips
-        // the backfill. A fabricated constant would make unrelated sessions look identical, which is
-        // exactly the cross-account mix-up this guard exists to prevent.
-        var exchangeWithoutId = mock(org.springframework.web.server.ServerWebExchange.class);
-        var sessionWithoutId = mock(org.springframework.web.server.WebSession.class);
-        when(sessionWithoutId.getId()).thenReturn(null);
-        when(exchangeWithoutId.getSession()).thenReturn(Mono.just(sessionWithoutId));
+    @DisplayName("资料按建号用户名关联，永不跨账号错配（原会话 id 方案的继任者）")
+    void profilesAreKeyedByAccountNotBySession() {
+        // The old session-id keying read a thread-local that Halo's createUser chain had already
+        // moved off, so the backfill silently never happened. The username keying cannot fail that
+        // way: Halo hands preCreating the very User the provisioner parked the profile for. Here a
+        // profile parked for one account must not be claimable by another.
+        var profileHandler = new BlogsClubUserPreCreatingHandler();
+        profileHandler.remember("user-one", principal("123"));
+        profileHandler.remember("user-two", principal("456"));
 
-        StepVerifier.create(BlogsClubSessionContext.resolveSessionId(exchangeWithoutId))
-            .verifyComplete();
+        // user-two's profile must never be applied to an account named user-one.
+        var one = newUser("user-one");
+        StepVerifier.create(profileHandler.preCreating(one)).verifyComplete();
+        assertThat(one.getSpec().getEmail()).isNull();
+
+        // ...and the rightful account still claims its own.
+        var two = newUser("user-two");
+        StepVerifier.create(profileHandler.preCreating(two)).verifyComplete();
+    }
+
+    private static run.halo.app.core.extension.User newUser(String name) {
+        var user = new run.halo.app.core.extension.User();
+        user.setMetadata(new run.halo.app.extension.Metadata());
+        user.getMetadata().setName(name);
+        user.setSpec(new run.halo.app.core.extension.User.UserSpec());
+        return user;
     }
 
     @Test
@@ -144,7 +159,8 @@ class BlogsClubProvisioningSafetyTest {
         when(client.fetch(run.halo.app.extension.ConfigMap.class,
             run.halo.app.infra.SystemSetting.SYSTEM_CONFIG)).thenReturn(Mono.just(configMap));
         var userService = mock(run.halo.app.core.user.service.UserService.class);
-        var provisioner = new BlogsClubAccountProvisioner(client, userService);
+        var provisioner = new BlogsClubAccountProvisioner(client, userService,
+            new BlogsClubUserPreCreatingHandler());
         var h = new BlogsClubAccountProvisioningHandler(client, provisioner);
         when(client.listAll(eq(UserConnection.class), any(ListOptions.class), any()))
             .thenReturn(reactor.core.publisher.Flux.empty());

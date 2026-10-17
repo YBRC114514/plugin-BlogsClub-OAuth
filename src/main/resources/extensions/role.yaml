@@ -31,4 +31,12 @@ rules:
   - apiGroups: [ "core.halo.run" ]
     resourceNames: [ "system", "oauth2-blogsclub-config" ]
     resources: [ "configmaps" ]
-    verbs: [ "get" ]
+    verbs: [ "get", "update" ]
+
+  # The AppKey (client secret) is kept in a Halo Secret, not a ConfigMap — the halo-plugin-dev
+  # skill mandates that credentials live in Secrets. The scope is narrowed to the one Secret this
+  # plugin owns, by name.
+  - apiGroups: [ "" ]
+    resourceNames: [ "blogsclub-oauth2-client-secret" ]
+    resources: [ "secrets" ]
+    verbs: [ "get", "create", "update" ]

@@ -85,14 +85,18 @@ https://你的站点域名/login/oauth2/code/blogsclub
 
 两项均为必填。缺失时插件会 fail-closed（绝不以空凭据向 BlogsClub 发起请求），并提示你前往该配置页填写。
 
+> **AppKey 的存放位置**：保存后插件会把 AppKey 转入 Halo 密钥（Secret，名称 `blogsclub-oauth2-client-secret`）中保管，不再留存于 ConfigMap——密钥类凭据按 Halo 插件开发规范应存放于 Secret。若在控制台重新保存本表单，插件会在下次读取时自动再次完成该迁移。
+
 ## 首次登录流程
 
 1. 博主点击「使用 BlogsClub 登录」，跳转授权页并同意授权；
 2. Halo 回调插件，插件用 AppID / AppKey 换取 `access_token`，并拉取博主资料；
 3. 若该 `openid` **已绑定**本站账号 → 直接登录，跳转个人中心；
-4. 若**未绑定** → 站点设置允许注册且存在默认角色时，插件创建 Halo 账号，并在建号前（`UserPreCreatingHandler`）把 BlogsClub 回调返回的 **邮箱 / 昵称 / 头像**写入新账号。邮箱直接来自刚刚完成认证的身份提供方，因此视为已提供、**无需再做邮箱验证**；
+4. 若**未绑定** → 站点设置允许注册且存在默认角色时，插件创建 Halo 账号，并在建号前（`UserPreCreatingHandler`）把 BlogsClub 回调返回的 **邮箱 / 昵称 / 头像**写入新账号。资料按建号用户名严格关联，只会写入这一次创建的账号；邮箱直接来自刚刚完成认证的身份提供方，因此视为已提供、**无需再做邮箱验证**；
 5. 若站点关闭了「允许注册」或未配置默认角色 → 插件**不创建账号**，转而跳转到 Halo 原生绑定流程（`/login?oauth2_bind`），需先手动注册或登录本站账号再完成绑定；
 6. 完成后自动登录并跳转个人中心。
+
+> 第 6 步的登录态由 Halo 内核的 OAuth2 映射过滤器完成：插件在回调中写好账号与绑定关系后，内核会把认证结果映射到真实账号上，并统一处理记住登录、设备记录等登录增强逻辑。
 
 之后博主既可一键 BlogsClub 登录。由于账号是自动创建、没有设置过密码，若需要使用密码登录可在个人中心自行设置站点密码。
 
@@ -132,12 +136,13 @@ blogsclub:
 - 目标地址固定为 `www.blogsclub.org`，不接受用户可控的目标覆写，以降低 SSRF 风险
 - 回调失败或 AppKey 缺失时 **fail-closed**，不会以空密钥继续请求
 - 凭据缺失时插件拒绝继续流程（fail-closed），不会静默降级
+- AppKey（clientSecret）存放于 Halo 密钥（Secret）而非 ConfigMap，与 Halo 插件开发规范对密钥类凭据的存放要求一致
 
 ## 构建
 
 ```bash
 ./gradlew clean build
-# 产物：build/libs/plugin-blogsclub-1.3.0.jar
+# 产物：build/libs/plugin-blogsclub-1.3.1.jar
 ```
 
 运行单元测试：
@@ -152,15 +157,14 @@ blogsclub:
 src/main/java/io/github/ybrc114514/blogsclub/
   BlogsClubPlugin.java                        插件主类
   BlogsClubLoginConfiguration.java            插件内 Spring 装配（WebClient / 出站超时）
-  BlogsClubAuthenticationWebFilter.java       OAuth2 回调过滤器（成功回调里串起建号 → 增强 → 跳转）
+  BlogsClubAuthenticationWebFilter.java       OAuth2 回调过滤器（成功回调里串起建号 → 跳转）
   BlogsClubRedirectWebFilter.java             授权跳转过滤器（透传 popup display 参数）
   BlogsClubAuthorizationRequestResolver.java 授权请求参数解析
   BlogsClubOAuth2UserService.java             userinfo 适配器（解包 data / 映射 openid，token 仅走 header）
-  BlogsClubClientRegistrationRepository.java  客户端注册仓库（读取 AppID / AppKey）
+  BlogsClubClientRegistrationRepository.java  客户端注册仓库（AppID 读 ConfigMap，AppKey 存 Halo Secret）
   BlogsClubAccountProvisioningHandler.java    判定当前认证身份是否需要建号
   BlogsClubAccountProvisioner.java            创建 User + 写入 UserConnection（遵循站点注册设置）
-  BlogsClubSessionContext.java                严格会话绑定，防止资料跨会话错配
-  BlogsClubUserPreCreatingHandler.java        建号前写入 BlogsClub 邮箱 / 昵称 / 头像
+  BlogsClubUserPreCreatingHandler.java        建号前按用户名关联，写入 BlogsClub 邮箱 / 昵称 / 头像
   BlogsClubClientRegistration.java            客户端注册 Scheme 定义
   BlogsClubAuthorizedClient.java              私有 GVK 授权客户端定义
   DefaultOAuth2AuthorizedClientService.java   授权客户端持久化
@@ -175,6 +179,18 @@ src/main/resources/extensions/
   reverseproxy.yaml                           插件反向代理规则
   setting.yaml                                AppID / AppKey 配置表单
 ```
+
+## 更新日志
+
+### 1.3.1
+
+- **修复**：资料回填（邮箱 / 昵称 / 头像）原先依赖线程本地变量传递会话 id，在 Halo 建号链路跨响应式线程后必然丢失，导致回填**静默失效**。现改为按建号用户名关联——用户名由插件生成并通过 Halo 交给 `UserPreCreatingHandler` 的 `User` 对象本身传递，任何线程调度下都不会丢失，且关联性比会话匹配更严格（只会写入这一次创建的账号）。
+- **修复**：回调成功后插件曾用**裸 OAuth2 令牌**额外调用一次 `LoginHandlerEnhancer.onLoginSuccess`，而 Halo 内核的 OAuth2 映射过滤器随后还会用映射后的真实账号令牌再调用一次——前者会让 Halo 为不存在的用户名（openid）记录登录事件。现已移除该重复调用，登录增强统一由内核处理（与 Halo 官方 OAuth2 插件行为一致）。
+- **安全**：AppKey（clientSecret）不再存放于 ConfigMap，改为存入 Halo 密钥（Secret）`blogsclub-oauth2-client-secret`；控制台表单中残留的旧值会在下次读取时自动迁移并清除。符合 Halo 插件开发技能中「密码 / 令牌 / API 密钥必须存 Secret」的要求。
+
+### 1.3.0
+
+- 按应用市场审核意见完成整改：资源类型改用插件私有分组（`blogsclub.oauth.ybrc114514.io`）与官方 OAuth2 插件隔离；补齐首次登录自动建号（遵循站点「允许注册」与默认角色设置）；资料写入严格关联当前认证身份；包名迁移到独立命名空间；`plugin.yaml` 的 app-id 修正为 `app-yjha8jz5`。
 
 ## 致谢
 

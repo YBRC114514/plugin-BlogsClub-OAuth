@@ -33,9 +33,11 @@ import run.halo.app.infra.SystemSetting;
  * site that closed registration gets no new accounts from BlogsClub either. When the policy forbids
  * registration the caller falls back to Halo's binding flow instead of force-creating an account.</p>
  *
- * <p>Profile data is deliberately <em>not</em> written here. {@link BlogsClubUserPreCreatingHandler}
- * fills the e-mail, display name and avatar from inside {@link UserService#createUser}, bound to the
- * session that authenticated — see that class for why the association has to be provable.</p>
+ * <p>Profile data is written by {@link BlogsClubUserPreCreatingHandler} from inside Halo's own
+ * {@code createUser} call: this service parks the profile under the username it is about to create
+ * (see that class for why the username is the only association that survives Halo's reactive
+ * chain), and the handler writes the e-mail, display name and avatar just before the extension is
+ * persisted.</p>
  *
  * @since 1.1.0
  */
@@ -61,9 +63,13 @@ public class BlogsClubAccountProvisioner {
 
     private final UserService userService;
 
-    public BlogsClubAccountProvisioner(ReactiveExtensionClient client, UserService userService) {
+    private final BlogsClubUserPreCreatingHandler profileHandler;
+
+    public BlogsClubAccountProvisioner(ReactiveExtensionClient client, UserService userService,
+        BlogsClubUserPreCreatingHandler profileHandler) {
         this.client = client;
         this.userService = userService;
+        this.profileHandler = profileHandler;
     }
 
     /**
@@ -86,11 +92,12 @@ public class BlogsClubAccountProvisioner {
                     log.warn("[BlogsClub] 站点未配置默认角色，无法自动建号：openid={}", openId);
                     return Mono.empty();
                 }
-                return createAccount(setting, openId);
+                return createAccount(setting, openId, principal);
             });
     }
 
-    private Mono<User> createAccount(SiteUserSetting setting, String openId) {
+    private Mono<User> createAccount(SiteUserSetting setting, String openId,
+        OAuth2User principal) {
         return resolveUsername(openId)
             .flatMap(username -> {
                 var user = new User();
@@ -101,9 +108,13 @@ public class BlogsClubAccountProvisioner {
                 // as "cannot sign in with a password", which is what we want — the blogger cannot
                 // take over an OAuth2 account through the password reset flow.
                 //
-                // Note that BlogsClubUserPreCreatingHandler fills displayName / email / avatar
-                // inside createUser, right before the extension is persisted.
+                // Park the profile under the name of the account Halo is about to create:
+                // BlogsClubUserPreCreatingHandler is invoked from inside createUser with exactly
+                // this User, so the username is the one piece of context that reliably survives
+                // Halo's reactive chain (a session id read from a thread-local does not).
+                profileHandler.remember(username, principal);
                 return userService.createUser(user, Set.of(setting.defaultRole()))
+                    .doOnError(error -> profileHandler.forget(username))
                     .flatMap(created -> bindIdentity(openId, created)
                         .thenReturn(created));
             })

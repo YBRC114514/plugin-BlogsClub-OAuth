@@ -50,7 +50,8 @@ class BlogsClubAccountProvisioningHandlerTest {
         client = org.mockito.Mockito.mock(ReactiveExtensionClient.class);
         userService = org.mockito.Mockito.mock(UserService.class);
         handler = new BlogsClubAccountProvisioningHandler(client,
-            new BlogsClubAccountProvisioner(client, userService));
+            new BlogsClubAccountProvisioner(client, userService,
+                new BlogsClubUserPreCreatingHandler()));
     }
 
     private static OAuth2User principal(String openId, Map<String, Object> attributes) {
