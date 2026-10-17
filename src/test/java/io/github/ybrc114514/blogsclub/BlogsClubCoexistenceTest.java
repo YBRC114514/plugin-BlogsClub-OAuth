@@ -7,12 +7,14 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.lang.reflect.Constructor;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.AutowiredAnnotationBeanPostProcessor;
 import org.springframework.core.annotation.AnnotationAwareOrderComparator;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -285,6 +287,29 @@ class BlogsClubCoexistenceTest {
             runs.incrementAndGet();
             return Mono.empty();
         };
+    }
+
+    @Test
+    @DisplayName("Spring 构造器选择钉死公开构造器（v1.4.1 启动崩溃回归：No default constructor found）")
+    void springConstructorSelectionPinsThePublicConstructor() {
+        // Halo starts plugins through a plain Spring context, so bean creation runs
+        // AutowiredAnnotationBeanPostProcessor.determineCandidateConstructors. With several
+        // constructors and no @Autowired it looks for a no-arg default constructor — there is
+        // none, and plugin startup dies with "No default constructor found" /
+        // NoSuchMethodException <init>() (exactly what v1.4.1 shipped: the plugin could not
+        // start at all). The @Autowired on the public constructor must keep Spring on the
+        // four-arg constructor, and the package-private test constructor must stay invisible.
+        var postProcessor = new AutowiredAnnotationBeanPostProcessor() {
+            Constructor<?>[] candidatesFor(Class<?> beanClass) {
+                return determineCandidateConstructors(beanClass, beanClass.getName());
+            }
+        };
+        var candidates = postProcessor.candidatesFor(BlogsClubAuthenticationWebFilter.class);
+
+        assertThat(candidates).isNotNull();
+        assertThat(candidates).hasSize(1);
+        assertThat(candidates[0].getParameterCount()).isEqualTo(4);
+        assertThat(java.lang.reflect.Modifier.isPublic(candidates[0].getModifiers())).isTrue();
     }
 
     private static org.springframework.security.oauth2.core.user.OAuth2User oauth2User() {

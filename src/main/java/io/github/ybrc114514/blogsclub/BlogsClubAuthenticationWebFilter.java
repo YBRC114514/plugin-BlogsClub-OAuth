@@ -3,6 +3,7 @@ package io.github.ybrc114514.blogsclub;
 import io.netty.channel.ChannelOption;
 import java.time.Duration;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.security.oauth2.client.authentication.OAuth2LoginReactiveAuthenticationManager;
@@ -84,6 +85,15 @@ public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityW
 
     private final ServerSecurityContextRepository securityContextRepository;
 
+    /**
+     * The one constructor Spring must use. The {@code @Autowired} is load-bearing, not
+     * decoration: this class carries a second, package-private constructor for tests, and with
+     * several constructors and no {@code @Autowired} anywhere, Spring's
+     * {@code AutowiredAnnotationBeanPostProcessor} looks for a no-arg default constructor —
+     * there is none, so plugin startup dies with {@code No default constructor found}
+     * (that is exactly what shipped in v1.4.1: the site could not start the plugin at all).
+     */
+    @Autowired
     public BlogsClubAuthenticationWebFilter(BlogsClubLoginConfiguration configuration,
         ServerSecurityContextRepository securityContextRepository,
         OAuth2Properties oAuth2Properties,
