@@ -1,6 +1,7 @@
 package io.github.ybrc114514.blogsclub;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.annotation.Order;
 import org.springframework.security.oauth2.client.web.server.OAuth2AuthorizationRequestRedirectWebFilter;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
@@ -20,10 +21,23 @@ import run.halo.app.security.HttpBasicSecurityWebFilter;
  * and wrap the whole chain just like this filter; running the delegate for those paths used
  * to resolve them through our repository and fail them with our error page.</p>
  *
+ * <p><b>Why {@code @Order(0)}.</b> Halo collects the filters of every plugin for each
+ * extension point and sorts them with {@code AnnotationAwareOrderComparator}, so an
+ * {@code @Order} annotation on the filter class itself is honoured. Without one a filter
+ * runs at {@code Ordered.LOWEST_PRECEDENCE} — exactly like the official plugin-oauth2's
+ * filters — and the relative order then follows plugin load order. Reloading this plugin
+ * (every upgrade does) re-appends its filters at the end of the chain, which let the
+ * official plugin's broad-path filter claim {@code /oauth2/authorization/blogsclub} first
+ * and fail it inside its own strict client-conf parser (production incident 2026-10-17:
+ * every OAuth2 login on the site returned 500). {@code @Order(0)} keeps this filter ahead
+ * of any unordered plugin filter regardless of load order; the guard below then hands
+ * foreign requests straight to the next filter in the chain.</p>
+ *
  * @since 1.0.0
  */
 @Slf4j
 @Component
+@Order(0)
 public class BlogsClubRedirectWebFilter implements HttpBasicSecurityWebFilter {
 
     private final WebFilter delegate;

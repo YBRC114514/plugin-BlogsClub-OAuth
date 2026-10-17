@@ -3,6 +3,7 @@ package io.github.ybrc114514.blogsclub;
 import io.netty.channel.ChannelOption;
 import java.time.Duration;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.security.oauth2.client.authentication.OAuth2LoginReactiveAuthenticationManager;
 import org.springframework.security.oauth2.client.endpoint.WebClientReactiveAuthorizationCodeTokenResponseClient;
@@ -52,10 +53,21 @@ import run.halo.app.security.authentication.oauth2.HaloOAuth2AuthenticationToken
  * sees every request of the site, so its error handling is restricted to the BlogsClub callback —
  * otherwise it would replace Halo's own 404 and 500 pages.</p>
  *
+ * <p><b>Why {@code @Order(0)}.</b> Halo sorts the filters of every plugin for each extension
+ * point with {@code AnnotationAwareOrderComparator}; a filter without {@code @Order} runs at
+ * {@code Ordered.LOWEST_PRECEDENCE}, and the relative order of same-precedence filters follows
+ * plugin load order. Reloading this plugin (every upgrade does) therefore re-appends its
+ * filters behind the official plugin-oauth2's, whose callback matcher
+ * {@code /login/oauth2/code/{registrationId}} would then claim BlogsClub callbacks and fail
+ * them inside its own repository. {@code @Order(0)} keeps this filter ahead of any unordered
+ * plugin filter regardless of load order, and the literal-path matcher below then leaves
+ * foreign callbacks to their own plugin's filter.</p>
+ *
  * @since 1.0.0
  */
 @Slf4j
 @Component
+@Order(0)
 public class BlogsClubAuthenticationWebFilter implements AuthenticationSecurityWebFilter {
 
     private final WebFilter delegate;

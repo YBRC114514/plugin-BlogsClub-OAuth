@@ -6,22 +6,30 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.annotation.AnnotationAwareOrderComparator;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.security.authentication.ProviderNotFoundException;
 import org.springframework.security.oauth2.client.registration.ReactiveClientRegistrationRepository;
+import org.springframework.security.web.server.context.ServerSecurityContextRepository;
 import org.springframework.security.web.server.savedrequest.WebSessionServerRequestCache;
+import org.springframework.web.server.ServerWebExchange;
+import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 import run.halo.app.core.extension.AuthProvider;
 import run.halo.app.extension.ReactiveExtensionClient;
 import run.halo.app.infra.ExternalUrlSupplier;
+import run.halo.app.security.AuthenticationSecurityWebFilter;
+import run.halo.app.security.HttpBasicSecurityWebFilter;
 import run.halo.app.security.LoginHandlerEnhancer;
 
 /**
@@ -36,6 +44,14 @@ import run.halo.app.security.LoginHandlerEnhancer;
  * broad-path filter had claimed the foreign registration. Every third-party login on the
  * site was down except BlogsClub's own. These tests pin the deferral behaviour that fixes
  * it: never claim, never fail, another plugin's registration.</p>
+ *
+ * <p>A second incident the same day showed the flip side of the same mechanism: after
+ * upgrading our plugin its filters were re-appended <em>behind</em> the official plugin's
+ * (neither side carried an {@code @Order}, so plugin load order decided), and the official
+ * broad-path filter then claimed even BlogsClub's own endpoints and failed them inside its
+ * strict client-conf parser — every OAuth2 login on the site returned 500. The
+ * {@code @Order(0)} on our filters pins the precedence: ours always run first, and the path
+ * guards under test here hand foreign requests downstream.</p>
  */
 class BlogsClubCoexistenceTest {
 
@@ -129,6 +145,27 @@ class BlogsClubCoexistenceTest {
             .verifyComplete();
     }
 
+    @Test
+    @DisplayName("两个过滤器都排在无顺序注解的插件过滤器之前（复现 Halo 的排序）")
+    void filtersSortAheadOfUnorderedPluginFilters() {
+        // Exactly how Halo's SecurityWebFilterChainProxy orders the extensions of one
+        // extension point: AnnotationAwareOrderComparator over the collected instances.
+        // A filter without @Order sorts at Ordered.LOWEST_PRECEDENCE — where the official
+        // plugin-oauth2's filters live — so ours must come first for both extension points,
+        // no matter in which order the plugins were loaded or reloaded.
+        var redirect = redirectFilter();
+        var redirectGroup = new ArrayList<WebFilter>(
+            List.of(unorderedRedirectFilter(), redirect));
+        redirectGroup.sort(AnnotationAwareOrderComparator.INSTANCE);
+        assertThat(redirectGroup.get(0)).isSameAs(redirect);
+
+        var authentication = authenticationFilter();
+        var authenticationGroup = new ArrayList<WebFilter>(
+            List.of(unorderedAuthenticationFilter(), authentication));
+        authenticationGroup.sort(AnnotationAwareOrderComparator.INSTANCE);
+        assertThat(authenticationGroup.get(0)).isSameAs(authentication);
+    }
+
     private static BlogsClubRedirectWebFilter redirectFilter() {
         var clientRegistrationRepository = mock(ReactiveClientRegistrationRepository.class);
         var configuration = mock(BlogsClubLoginConfiguration.class);
@@ -141,6 +178,43 @@ class BlogsClubCoexistenceTest {
 
     private static MockServerWebExchange exchange(String uri) {
         return MockServerWebExchange.from(MockServerHttpRequest.get(uri).build());
+    }
+
+    /**
+     * Stand-in for the official plugin-oauth2's {@code HaloOAuth2RedirectWebFilter}: same
+     * extension point, no {@code @Order} annotation.
+     */
+    private static WebFilter unorderedRedirectFilter() {
+        return new HttpBasicSecurityWebFilter() {
+            @Override
+            public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
+                return chain.filter(exchange);
+            }
+        };
+    }
+
+    /**
+     * Stand-in for the official plugin-oauth2's {@code HaloOAuth2AuthenticationWebFilter}:
+     * same extension point, no {@code @Order} annotation.
+     */
+    private static WebFilter unorderedAuthenticationFilter() {
+        return new AuthenticationSecurityWebFilter() {
+            @Override
+            public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
+                return chain.filter(exchange);
+            }
+        };
+    }
+
+    private static BlogsClubAuthenticationWebFilter authenticationFilter() {
+        var configuration = new BlogsClubLoginConfiguration(
+            mock(ReactiveExtensionClient.class),
+            mock(LoginHandlerEnhancer.class),
+            mock(ExternalUrlSupplier.class));
+        return new BlogsClubAuthenticationWebFilter(configuration,
+            mock(ServerSecurityContextRepository.class),
+            new OAuth2Properties(),
+            mock(BlogsClubAccountProvisioningHandler.class));
     }
 
     private static WebFilterChain chain(MockServerWebExchange exchange) {

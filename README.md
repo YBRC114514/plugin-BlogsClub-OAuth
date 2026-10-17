@@ -23,7 +23,7 @@
 - 已绑定用户直接登录；个人中心可随时绑定 / 解绑 BlogsClub 账号
 - AppID / AppKey 未配置时显示中文提示页，而不是抛出空白 500 错误
 - 支持弹窗（popup）模式：`/oauth2/authorization/blogsclub?display=popup`
-- 与 Halo 官方 OAuth2 插件（plugin-oauth2）**共存**：两者的登录方式互不拦截——官方插件的 github / gitlab / gitee 走官方链路，BlogsClub 走本插件链路（本插件只处理 `/oauth2/authorization/blogsclub` 与 `/login/oauth2/code/blogsclub`，其余 registration 原样放行）
+- 与 Halo 官方 OAuth2 插件（plugin-oauth2）**共存**：两者的登录方式互不拦截——官方插件的 github / gitlab / gitee 走官方链路，BlogsClub 走本插件链路（本插件只处理 `/oauth2/authorization/blogsclub` 与 `/login/oauth2/code/blogsclub`，其余 registration 原样放行；两个过滤器带 `@Order(0)`，无论插件加载/升级顺序如何都排在无顺序注解的插件过滤器之前）
 
 ## 隐私与数据说明
 
@@ -58,7 +58,7 @@
 
 ### 手动安装 JAR
 
-1. Halo 后台「插件」→「上传插件」，选择 `plugin-blogsclub-1.3.2.jar`；
+1. Halo 后台「插件」→「上传插件」，选择 `plugin-blogsclub-1.3.3.jar`；
 2. 安装完成后**启用**插件；
 3. 进入「用户」→「认证方式」，找到 **BlogsClub** 并**启用**；
 4. 点击该条目的**「设置」**，填写 **AppID** 与 **AppKey**（见下方）。
@@ -143,7 +143,7 @@ blogsclub:
 
 ```bash
 ./gradlew clean build
-# 产物：build/libs/plugin-blogsclub-1.3.2.jar
+# 产物：build/libs/plugin-blogsclub-1.3.3.jar
 ```
 
 运行单元测试：
@@ -182,6 +182,9 @@ src/main/resources/extensions/
 ```
 
 ## 更新日志
+
+### 1.3.3
+- **修复（生产事故，与官方 OAuth2 插件共存的过滤器顺序）**：升级本插件后，全站 OAuth2 登录（含 BlogsClub 自身）全部 500。根因：Halo 按插件**加载顺序**排列各插件在同一扩展点上的过滤器，本插件每次升级/重载都会被重新排到链路末尾，于是官方插件的宽路径过滤器抢先处理所有 `/oauth2/authorization/*` 请求——它对 blogsclub 的 AuthProvider 配置（AppKey 已按 1.3.1 迁入 Halo 密钥）做严格校验失败而 500。现为两个过滤器添加 `@Order(0)`（Halo 核心用 `AnnotationAwareOrderComparator` 排序，注解生效），无论插件加载/升级顺序如何都排在其他无顺序注解的插件过滤器之前；配合 1.3.2 的路径守卫，外来请求仍原样转交官方插件处理。新增排序回归测试。
 
 ### 1.3.2
 
